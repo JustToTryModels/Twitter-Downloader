@@ -1,1 +1,3 @@
-
+streamlit==1.33.0
+yt-dlp==2024.5.27
+gallery-dl==1.27.1
