@@ -10,6 +10,49 @@ import mimetypes
 # --- Page Configuration ---
 st.set_page_config(page_title="Twitter Media Downloader", page_icon="🐦", layout="centered")
 
+# --- Custom CSS for Stylish Buttons ---
+st.markdown("""
+<style>
+/* Style for the main action button ('Fetch Video') */
+div.stButton > button:first-child {
+    background: linear-gradient(90deg, #FF4B2B, #FF416C);
+    color: white;
+    font-size: 18px;
+    font-weight: bold;
+    padding: 12px 30px;
+    border: none;
+    border-radius: 50px; /* Makes it a pill shape */
+    box-shadow: 0 4px 14px 0 rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease-in-out;
+    width: 100%;
+}
+
+div.stButton > button:first-child:hover {
+    transform: scale(1.03);
+    box-shadow: 0 6px 20px 0 rgba(0, 0, 0, 0.2);
+}
+
+/* Style for the file download button */
+div.stDownloadButton > button:first-child {
+    background: linear-gradient(90deg, #FF4B2B, #FF416C);
+    color: white;
+    font-size: 18px;
+    font-weight: bold;
+    padding: 12px 30px;
+    border: none;
+    border-radius: 50px;
+    box-shadow: 0 4px 14px 0 rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease-in-out;
+    width: 100%;
+}
+
+div.stDownloadButton > button:first-child:hover {
+    transform: scale(1.03);
+    box-shadow: 0 6px 20px 0 rgba(0, 0, 0, 0.2);
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("Twitter Media Downloader 🐦")
 st.write("Paste a Twitter/X link below. The app will automatically detect and download any videos or images from the tweet.")
 
@@ -24,10 +67,12 @@ if 'media_data' not in st.session_state:
     st.session_state.status_message = None
 
 # --- Input Field ---
-tweet_url = st.text_input("Enter Twitter/X URL:", placeholder="https://twitter.com/user/status/1234567890")
+tweet_url = st.text_input("Enter Twitter/X URL:", placeholder="https://twitter.com/user/status/1234567890", label_visibility="collapsed")
+
+show_preview = st.toggle("Show preview", value=True, help="If enabled, a preview of the media will be shown after loading.")
 
 # --- Download Logic ---
-if st.button("Download Media", type="primary"):
+if st.button("⬇️ Fetch Media"):
     if not tweet_url:
         st.warning("Please enter a valid URL.")
     else:
@@ -43,7 +88,6 @@ if st.button("Download Media", type="primary"):
 
             if video_check.returncode == 0:
                 # --- VIDEO/GIF FOUND ---
-                st.info("🎬 Video or GIF detected. Downloading...")
                 out_template = os.path.join(temp_dir, "%(id)s.%(ext)s")
                 
                 # Run download - fetch highest available quality
@@ -79,7 +123,6 @@ if st.button("Download Media", type="primary"):
             
             else:
                 # --- NO VIDEO, TRY IMAGES ---
-                st.info("🖼️ No video detected. Attempting to download images...")
                 subprocess.run(["gallery-dl", "-d", temp_dir, tweet_url])
                 
                 # Find all downloaded images (gallery-dl sometimes creates subfolders)
@@ -129,39 +172,57 @@ if st.button("Download Media", type="primary"):
 
 # --- Display media from session state (persists across reruns and tab switches) ---
 if st.session_state.status_message == "success_video":
-    st.success("Download complete!")
-    st.video(st.session_state.media_data)
-    st.download_button(
-        label="⬇️ Click here to download the video",
-        data=st.session_state.media_data,
-        file_name=st.session_state.media_name,
-        mime=st.session_state.media_mime,
-        key=f"dl_video_{st.session_state.last_url}"
-    )
+    st.success("✅ Media loaded successfully!")
+    
+    if show_preview:
+        st.video(st.session_state.media_data)
+        
+    spacer_col, button_col = st.columns([2, 1])
+    with button_col:
+        st.download_button(
+            label="Download Video",
+            data=st.session_state.media_data,
+            file_name=st.session_state.media_name,
+            mime=st.session_state.media_mime,
+            key=f"dl_video_{st.session_state.last_url}"
+        )
+
 elif st.session_state.status_message == "success_image_single":
-    st.success("Download complete!")
-    st.image(st.session_state.media_data, caption=st.session_state.media_name, use_column_width=True)
-    st.download_button(
-        label="⬇️ Click here to download the image",
-        data=st.session_state.media_data,
-        file_name=st.session_state.media_name,
-        mime=st.session_state.media_mime,
-        key=f"dl_img_{st.session_state.last_url}"
-    )
+    st.success("✅ Media loaded successfully!")
+    
+    if show_preview:
+        st.image(st.session_state.media_data, caption=st.session_state.media_name, use_column_width=True)
+        
+    spacer_col, button_col = st.columns([2, 1])
+    with button_col:
+        st.download_button(
+            label="Download Image",
+            data=st.session_state.media_data,
+            file_name=st.session_state.media_name,
+            mime=st.session_state.media_mime,
+            key=f"dl_img_{st.session_state.last_url}"
+        )
+
 elif st.session_state.status_message == "success_image_multi":
-    st.success("Download complete!")
-    st.write(f"Found {len(st.session_state.previews)} images!")
-    cols = st.columns(3)
-    for idx, (img_data, caption) in enumerate(st.session_state.previews):
-        with cols[idx % 3]:
-            st.image(img_data, caption=caption, use_column_width=True)
-    st.download_button(
-        label="⬇️ Click here to download all images (ZIP)",
-        data=st.session_state.media_data,
-        file_name="twitter_images.zip",
-        mime="application/zip",
-        key=f"dl_zip_{st.session_state.last_url}"
-    )
+    st.success("✅ Media loaded successfully!")
+    
+    if show_preview:
+        st.write(f"Found {len(st.session_state.previews)} images!")
+        cols = st.columns(3)
+        for idx, (img_data, caption) in enumerate(st.session_state.previews):
+            with cols[idx % 3]:
+                st.image(img_data, caption=caption, use_column_width=True)
+                
+    spacer_col, button_col = st.columns([2, 1])
+    with button_col:
+        st.download_button(
+            label="Download All (ZIP)",
+            data=st.session_state.media_data,
+            file_name="twitter_images.zip",
+            mime="application/zip",
+            key=f"dl_zip_{st.session_state.last_url}"
+        )
+
 elif st.session_state.status_message == "error_video":
     st.error("Failed to download video. Twitter might be rate-limiting this server.")
 elif st.session_state.status_message == "error_image":
