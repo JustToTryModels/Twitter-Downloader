@@ -174,12 +174,12 @@ if fetch_clicked:
             with st.spinner("Analyzing link and extracting all available media..."):
                 try:
                     # 1. Fetch videos/GIFs using yt-dlp
-                    # The autonumber tag ensures multiple videos don't overwrite each other
+                    # We prefix the output with 'ytdlp_vid_' so we can identify videos downloaded by yt-dlp
                     subprocess.run([
                         "yt-dlp",
                         "-f", "bestvideo+bestaudio/best",
                         "--merge-output-format", "mp4",
-                        "-o", os.path.join(temp_dir, "vid_%(id)s_%(autonumber)s.%(ext)s"),
+                        "-o", os.path.join(temp_dir, "ytdlp_vid_%(id)s_%(autonumber)s.%(ext)s"),
                         tweet_url
                     ], capture_output=True)
 
@@ -194,22 +194,33 @@ if fetch_clicked:
                     all_files = glob.glob(os.path.join(temp_dir, "**", "*"), recursive=True)
                     file_paths = [f for f in all_files if os.path.isfile(f)]
 
-                    # Allowed final extensions to prevent temp files from appearing
-                    valid_extensions = [".mp4", ".jpg", ".jpeg", ".png", ".gif", ".webm", ".mkv"]
+                    valid_video_exts = [".mp4", ".webm", ".mkv"]
+                    valid_image_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
                     
                     extracted_media = []
                     seen_hashes = set()
 
                     for fp in file_paths:
-                        # Skip temporary or unwanted files
-                        if not any(fp.lower().endswith(ext) for ext in valid_extensions):
+                        basename = os.path.basename(fp)
+                        basename_lower = basename.lower()
+                        
+                        is_video = any(basename_lower.endswith(ext) for ext in valid_video_exts)
+                        is_image = any(basename_lower.endswith(ext) for ext in valid_image_exts)
+
+                        # Skip temporary or unwanted files entirely
+                        if not (is_video or is_image):
+                            continue
+                            
+                        # DEDUPLICATION FIX: gallery-dl sometimes downloads identical videos alongside yt-dlp.
+                        # We force the app to ignore ANY video that was not downloaded by yt-dlp.
+                        if is_video and not basename.startswith("ytdlp_vid_"):
                             continue
                             
                         # Read file data into memory
                         with open(fp, "rb") as f:
                             data = f.read()
                         
-                        # Deduplicate (If both yt-dlp and gallery-dl download the exact same file)
+                        # Deduplicate images (If gallery-dl downloads multiple sizes/thumbnails of the exact same image)
                         file_hash = hashlib.md5(data).hexdigest()
                         if file_hash in seen_hashes:
                             continue
@@ -220,11 +231,11 @@ if fetch_clicked:
                         if not mime_type:
                             mime_type = "application/octet-stream"
 
-                        # Determine if it's a video or image for the UI preview
-                        media_type = "video" if "video" in mime_type else "image"
+                        # Set type for UI preview handling
+                        media_type = "video" if is_video else "image"
 
                         extracted_media.append({
-                            "name": os.path.basename(fp),
+                            "name": basename,
                             "data": data,
                             "mime": mime_type,
                             "type": media_type
