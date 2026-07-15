@@ -174,7 +174,6 @@ if fetch_clicked:
             with st.spinner("Analyzing link and extracting all available media..."):
                 try:
                     # 1. Fetch videos/GIFs using yt-dlp
-                    # We prefix the output with 'ytdlp_vid_' so we can identify videos downloaded by yt-dlp
                     subprocess.run([
                         "yt-dlp",
                         "-f", "bestvideo+bestaudio/best",
@@ -207,31 +206,24 @@ if fetch_clicked:
                         is_video = any(basename_lower.endswith(ext) for ext in valid_video_exts)
                         is_image = any(basename_lower.endswith(ext) for ext in valid_image_exts)
 
-                        # Skip temporary or unwanted files entirely
                         if not (is_video or is_image):
                             continue
                             
-                        # DEDUPLICATION FIX: gallery-dl sometimes downloads identical videos alongside yt-dlp.
-                        # We force the app to ignore ANY video that was not downloaded by yt-dlp.
                         if is_video and not basename.startswith("ytdlp_vid_"):
                             continue
                             
-                        # Read file data into memory
                         with open(fp, "rb") as f:
                             data = f.read()
                         
-                        # Deduplicate images (If gallery-dl downloads multiple sizes/thumbnails of the exact same image)
                         file_hash = hashlib.md5(data).hexdigest()
                         if file_hash in seen_hashes:
                             continue
                         seen_hashes.add(file_hash)
 
-                        # Determine Mime Type
                         mime_type, _ = mimetypes.guess_type(fp)
                         if not mime_type:
                             mime_type = "application/octet-stream"
 
-                        # Set type for UI preview handling
                         media_type = "video" if is_video else "image"
 
                         extracted_media.append({
@@ -259,25 +251,21 @@ if st.session_state.status_message == "success":
     st.success(f"✅ **Successfully extracted {len(st.session_state.media_items)} media item(s)!**")
     st.write("")
     
-    # Create a clean 2-column grid for the media items
     cols = st.columns(2)
     
     for idx, item in enumerate(st.session_state.media_items):
-        with cols[idx % 2]: # Distribute evenly between left and right columns
+        with cols[idx % 2]:
             st.markdown('<div class="media-card">', unsafe_allow_html=True)
             
-            # 1. Preview
             if show_preview:
                 if item["type"] == "video":
                     st.video(item["data"])
                 else:
                     st.image(item["data"], use_column_width=True)
             else:
-                # Fallback if preview is toggled off
                 icon = "🎥" if item["type"] == "video" else "📸"
                 st.markdown(f"<div style='text-align: center; padding: 20px;'><h3>{icon} {item['type'].title()} File</h3></div>", unsafe_allow_html=True)
             
-            # 2. Individual Download Button
             st.download_button(
                 label=f"Download {item['type'].title()}",
                 data=item["data"],
@@ -296,3 +284,4 @@ elif st.session_state.status_message == "error_general":
 # --- Footer Disclaimer ---
 st.markdown("<br><br>", unsafe_allow_html=True)
 st.caption("ℹ️ **Note:** X/Twitter limits automated access. If you experience errors, it usually means the server's IP has been temporarily restricted.")
+st.markdown('<div style="text-align: center;"><a href="https://github.com/JustToTryModels/Twitter-Downloader/blob/main/app.py" target="_blank" style="color: #536471; text-decoration: none; font-size: 14px;">View Source Code on GitHub 💻</a></div>', unsafe_allow_html=True)
