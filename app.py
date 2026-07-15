@@ -295,5 +295,16 @@ elif st.session_state.status_message == "error_general":
 
 # --- Footer Disclaimer ---
 st.markdown("<br><br>", unsafe_allow_html=True)
+
+# Centered Clear Cache Button
+cc_col1, cc_col2, cc_col3 = st.columns([1, 1, 1])
+with cc_col2:
+    if st.button("Clear Cache", use_container_width=True):
+        st.session_state.media_items = []
+        st.session_state.last_url = None
+        st.session_state.status_message = None
+        st.session_state.error_details = None
+        st.rerun()
+
 st.caption("ℹ️ **Note:** X/Twitter limits automated access. If you experience errors, it usually means the server's IP has been temporarily restricted.")
 st.markdown('<div style="text-align: center;"><a href="https://github.com/JustToTryModels/Twitter-Downloader/blob/main/app.py" target="_blank" style="color: #536471; text-decoration: none; font-size: 14px;">View Source Code on GitHub 💻</a></div>', unsafe_allow_html=True)
