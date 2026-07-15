@@ -1,11 +1,10 @@
 import streamlit as st
 import os
-import io
 import subprocess
 import tempfile
 import glob
-import zipfile
 import mimetypes
+import hashlib
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -22,7 +21,7 @@ st.markdown("""
     .block-container {
         padding-top: 3rem;
         padding-bottom: 2rem;
-        max-width: 800px;
+        max-width: 900px;
     }
 
     /* Hide Streamlit branding */
@@ -86,14 +85,15 @@ st.markdown("""
     div.stDownloadButton > button:first-child {
         background-color: #1DA1F2;
         color: white;
-        font-size: 16px;
+        font-size: 15px;
         font-weight: 700;
-        padding: 12px 24px;
+        padding: 10px 20px;
         border: none;
         border-radius: 9999px;
         width: 100%;
-        box-shadow: 0 4px 12px rgba(29, 161, 242, 0.3);
+        box-shadow: 0 4px 12px rgba(29, 161, 242, 0.2);
         transition: background-color 0.2s ease, transform 0.1s ease;
+        margin-top: 10px;
     }
     div.stDownloadButton > button:first-child:hover {
         background-color: #1A8CD8;
@@ -103,19 +103,14 @@ st.markdown("""
         transform: scale(0.98);
     }
 
-    /* Toggles and Info boxes */
-    .stAlert {
-        border-radius: 16px;
-        border: none;
-    }
-    
     /* Media Containers */
-    .media-container {
+    .media-card {
+        background: #ffffff;
         border-radius: 16px;
-        overflow: hidden;
+        padding: 15px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
         border: 1px solid #EFF3F4;
-        margin-top: 1rem;
-        margin-bottom: 1rem;
+        margin-bottom: 20px;
     }
     
     /* Dark mode support */
@@ -138,23 +133,24 @@ st.markdown("""
             background-color: #D7DBDC;
             color: #0F1419;
         }
+        .media-card {
+            background: #15202B;
+            border: 1px solid #38444D;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header Section ---
 st.markdown('<div class="main-title">X / Twitter Downloader 🐦</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Easily download high-quality videos, GIFs, and images from any post.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Easily download mixed media (multiple videos, GIFs, and images) from any post.</div>', unsafe_allow_html=True)
 
 # --- Initialize session state ---
-if 'media_data' not in st.session_state:
-    st.session_state.media_data = None
-    st.session_state.media_name = None
-    st.session_state.media_type = None
-    st.session_state.media_mime = None
-    st.session_state.previews = []
+if 'media_items' not in st.session_state:
+    st.session_state.media_items = []
     st.session_state.last_url = None
     st.session_state.status_message = None
+    st.session_state.error_details = None
 
 # --- Input Area ---
 st.write("") # Spacer
@@ -162,7 +158,7 @@ tweet_url = st.text_input("URL Input", placeholder="Paste X/Twitter link here...
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    show_preview = st.toggle("Show media preview", value=True, help="Toggle to display or hide the media before downloading.")
+    show_preview = st.toggle("Show media previews", value=True, help="Toggle to display or hide the media before downloading.")
 with col2:
     fetch_clicked = st.button("Get Media")
 
@@ -173,100 +169,73 @@ if fetch_clicked:
     if not tweet_url:
         st.warning("⚠️ Please enter a valid URL.")
     else:
-        # Use Context Manager for temporary directory to ensure automatic cleanup (STABILITY FIX)
         with tempfile.TemporaryDirectory(prefix="twitter_dl_") as temp_dir:
             
-            with st.spinner("Analyzing link and fetching media in highest quality..."):
+            with st.spinner("Analyzing link and extracting all available media..."):
                 try:
-                    # 1. Check if the tweet contains a video/GIF
-                    video_check = subprocess.run(
-                        ["yt-dlp", "--simulate", "--quiet", tweet_url],
-                        capture_output=True, text=True
-                    )
+                    # 1. Fetch videos/GIFs using yt-dlp
+                    # The autonumber tag ensures multiple videos don't overwrite each other
+                    subprocess.run([
+                        "yt-dlp",
+                        "-f", "bestvideo+bestaudio/best",
+                        "--merge-output-format", "mp4",
+                        "-o", os.path.join(temp_dir, "vid_%(id)s_%(autonumber)s.%(ext)s"),
+                        tweet_url
+                    ], capture_output=True)
 
-                    if video_check.returncode == 0:
-                        # --- VIDEO/GIF FOUND ---
-                        out_template = os.path.join(temp_dir, "%(id)s.%(ext)s")
-                        
-                        # Run download - fetch highest available quality
-                        subprocess.run([
-                            "yt-dlp",
-                            "-f", "bestvideo+bestaudio/best",
-                            "--merge-output-format", "mp4",
-                            "-o", out_template,
-                            tweet_url
-                        ])
-                        
-                        # Find the downloaded file
-                        files = glob.glob(os.path.join(temp_dir, "*"))
-                        files = [f for f in files if os.path.isfile(f)]
-                        
-                        if files:
-                            file_path = files[0]
-                            file_name = os.path.basename(file_path)
-                            mime_type = mimetypes.guess_type(file_path)[0] or "video/mp4"
-                            
-                            with open(file_path, "rb") as f:
-                                data = f.read()
-                            
-                            st.session_state.media_data = data
-                            st.session_state.media_name = file_name
-                            st.session_state.media_type = "video"
-                            st.session_state.media_mime = mime_type
-                            st.session_state.previews = []
-                            st.session_state.last_url = tweet_url
-                            st.session_state.status_message = "success_video"
-                        else:
-                            st.session_state.status_message = "error_video"
+                    # 2. Fetch images using gallery-dl
+                    subprocess.run([
+                        "gallery-dl", 
+                        "--directory", temp_dir, 
+                        tweet_url
+                    ], capture_output=True)
+
+                    # 3. Collect ALL downloaded files recursively
+                    all_files = glob.glob(os.path.join(temp_dir, "**", "*"), recursive=True)
+                    file_paths = [f for f in all_files if os.path.isfile(f)]
+
+                    # Allowed final extensions to prevent temp files from appearing
+                    valid_extensions = [".mp4", ".jpg", ".jpeg", ".png", ".gif", ".webm", ".mkv"]
                     
+                    extracted_media = []
+                    seen_hashes = set()
+
+                    for fp in file_paths:
+                        # Skip temporary or unwanted files
+                        if not any(fp.lower().endswith(ext) for ext in valid_extensions):
+                            continue
+                            
+                        # Read file data into memory
+                        with open(fp, "rb") as f:
+                            data = f.read()
+                        
+                        # Deduplicate (If both yt-dlp and gallery-dl download the exact same file)
+                        file_hash = hashlib.md5(data).hexdigest()
+                        if file_hash in seen_hashes:
+                            continue
+                        seen_hashes.add(file_hash)
+
+                        # Determine Mime Type
+                        mime_type, _ = mimetypes.guess_type(fp)
+                        if not mime_type:
+                            mime_type = "application/octet-stream"
+
+                        # Determine if it's a video or image for the UI preview
+                        media_type = "video" if "video" in mime_type else "image"
+
+                        extracted_media.append({
+                            "name": os.path.basename(fp),
+                            "data": data,
+                            "mime": mime_type,
+                            "type": media_type
+                        })
+
+                    if extracted_media:
+                        st.session_state.media_items = extracted_media
+                        st.session_state.last_url = tweet_url
+                        st.session_state.status_message = "success"
                     else:
-                        # --- NO VIDEO, TRY IMAGES ---
-                        subprocess.run(["gallery-dl", "-d", temp_dir, tweet_url])
-                        
-                        # Find all downloaded images (gallery-dl sometimes creates subfolders)
-                        files = glob.glob(os.path.join(temp_dir, "**", "*"), recursive=True)
-                        files = [f for f in files if os.path.isfile(f)]  # Filter out directories
-                        
-                        if files:
-                            if len(files) == 1:
-                                file_path = files[0]
-                                file_name = os.path.basename(file_path)
-                                mime_type = mimetypes.guess_type(file_path)[0] or "image/jpeg"
-                                
-                                with open(file_path, "rb") as f:
-                                    data = f.read()
-                                
-                                st.session_state.media_data = data
-                                st.session_state.media_name = file_name
-                                st.session_state.media_type = "image"
-                                st.session_state.media_mime = mime_type
-                                st.session_state.previews = [(data, file_name)]
-                                st.session_state.last_url = tweet_url
-                                st.session_state.status_message = "success_image_single"
-                            else:
-                                # Multiple images - load all into memory and zip
-                                previews = []
-                                for f_path in files:
-                                    with open(f_path, "rb") as f:
-                                        img_data = f.read()
-                                    previews.append((img_data, os.path.basename(f_path)))
-                                
-                                # Zip the files in memory
-                                zip_buffer = io.BytesIO()
-                                with zipfile.ZipFile(zip_buffer, 'w') as zipf:
-                                    for img_data, fname in previews:
-                                        zipf.writestr(fname, img_data)
-                                zip_data = zip_buffer.getvalue()
-                                
-                                st.session_state.media_data = zip_data
-                                st.session_state.media_name = "twitter_images.zip"
-                                st.session_state.media_type = "zip"
-                                st.session_state.media_mime = "application/zip"
-                                st.session_state.previews = previews
-                                st.session_state.last_url = tweet_url
-                                st.session_state.status_message = "success_image_multi"
-                        else:
-                            st.session_state.status_message = "error_image"
+                        st.session_state.status_message = "error_no_media"
                 
                 except Exception as e:
                     st.session_state.status_message = "error_general"
@@ -275,71 +244,44 @@ if fetch_clicked:
 st.markdown("---")
 
 # --- Display Results ---
-if st.session_state.status_message == "success_video":
-    st.success("✅ **Media processed successfully!**")
+if st.session_state.status_message == "success":
+    st.success(f"✅ **Successfully extracted {len(st.session_state.media_items)} media item(s)!**")
+    st.write("")
     
-    if show_preview:
-        st.markdown('<div class="media-container">', unsafe_allow_html=True)
-        st.video(st.session_state.media_data)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-    spacer1, btn_col, spacer2 = st.columns([1, 2, 1])
-    with btn_col:
-        st.download_button(
-            label="Download High-Quality Video",
-            data=st.session_state.media_data,
-            file_name=st.session_state.media_name,
-            mime=st.session_state.media_mime,
-            key=f"dl_video_{st.session_state.last_url}"
-        )
-
-elif st.session_state.status_message == "success_image_single":
-    st.success("✅ **Image processed successfully!**")
+    # Create a clean 2-column grid for the media items
+    cols = st.columns(2)
     
-    if show_preview:
-        st.markdown('<div class="media-container">', unsafe_allow_html=True)
-        st.image(st.session_state.media_data, use_column_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-    spacer1, btn_col, spacer2 = st.columns([1, 2, 1])
-    with btn_col:
-        st.download_button(
-            label="Download Image",
-            data=st.session_state.media_data,
-            file_name=st.session_state.media_name,
-            mime=st.session_state.media_mime,
-            key=f"dl_img_{st.session_state.last_url}"
-        )
+    for idx, item in enumerate(st.session_state.media_items):
+        with cols[idx % 2]: # Distribute evenly between left and right columns
+            st.markdown('<div class="media-card">', unsafe_allow_html=True)
+            
+            # 1. Preview
+            if show_preview:
+                if item["type"] == "video":
+                    st.video(item["data"])
+                else:
+                    st.image(item["data"], use_column_width=True)
+            else:
+                # Fallback if preview is toggled off
+                icon = "🎥" if item["type"] == "video" else "📸"
+                st.markdown(f"<div style='text-align: center; padding: 20px;'><h3>{icon} {item['type'].title()} File</h3></div>", unsafe_allow_html=True)
+            
+            # 2. Individual Download Button
+            st.download_button(
+                label=f"Download {item['type'].title()}",
+                data=item["data"],
+                file_name=item["name"],
+                mime=item["mime"],
+                key=f"dl_{idx}_{st.session_state.last_url}"
+            )
+            
+            st.markdown('</div>', unsafe_allow_html=True)
 
-elif st.session_state.status_message == "success_image_multi":
-    st.success("✅ **Media gallery processed successfully!**")
-    
-    if show_preview:
-        st.write(f"📸 **Found {len(st.session_state.previews)} images:**")
-        cols = st.columns(2) # Changed to 2 columns for better visibility
-        for idx, (img_data, caption) in enumerate(st.session_state.previews):
-            with cols[idx % 2]:
-                st.markdown('<div class="media-container">', unsafe_allow_html=True)
-                st.image(img_data, use_column_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-    spacer1, btn_col, spacer2 = st.columns([1, 2, 1])
-    with btn_col:
-        st.download_button(
-            label=f"Download All ({len(st.session_state.previews)} Images as ZIP)",
-            data=st.session_state.media_data,
-            file_name="twitter_images.zip",
-            mime="application/zip",
-            key=f"dl_zip_{st.session_state.last_url}"
-        )
-
-elif st.session_state.status_message == "error_video":
-    st.error("🚫 **Failed to fetch video.** The tweet might not contain a video, or the server is being rate-limited by X.")
-elif st.session_state.status_message == "error_image":
-    st.error("🚫 **Failed to fetch images.** The link might be text-only, from a private account, or rate-limited.")
+elif st.session_state.status_message == "error_no_media":
+    st.error("🚫 **Failed to fetch media.** The link might be text-only, from a private account, or the server is temporarily rate-limited by X.")
 elif st.session_state.status_message == "error_general":
     st.error(f"⚠️ **An unexpected error occurred:** {st.session_state.error_details}")
 
 # --- Footer Disclaimer ---
 st.markdown("<br><br>", unsafe_allow_html=True)
-st.caption("ℹ️ **Note on availability:** X/Twitter aggressively limits automated access. If you experience errors, it usually means the server's IP has been temporarily restricted. This tool is intended for public, accessible media only.")
+st.caption("ℹ️ **Note:** X/Twitter limits automated access. If you experience errors, it usually means the server's IP has been temporarily restricted.")
