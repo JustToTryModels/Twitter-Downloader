@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import io
 import subprocess
 import tempfile
 import glob
@@ -11,6 +12,16 @@ st.set_page_config(page_title="Twitter Media Downloader", page_icon="🐦", layo
 
 st.title("Twitter Media Downloader 🐦")
 st.write("Paste a Twitter/X link below. The app will automatically detect and download any videos or images from the tweet.")
+
+# --- Initialize session state ---
+if 'media_data' not in st.session_state:
+    st.session_state.media_data = None
+    st.session_state.media_name = None
+    st.session_state.media_type = None
+    st.session_state.media_mime = None
+    st.session_state.previews = []
+    st.session_state.last_url = None
+    st.session_state.status_message = None
 
 # --- Input Field ---
 tweet_url = st.text_input("Enter Twitter/X URL:", placeholder="https://twitter.com/user/status/1234567890")
@@ -35,31 +46,36 @@ if st.button("Download Media", type="primary"):
                 st.info("🎬 Video or GIF detected. Downloading...")
                 out_template = os.path.join(temp_dir, "%(id)s.%(ext)s")
                 
-                # Run download
-                subprocess.run(["yt-dlp", "-o", out_template, tweet_url])
+                # Run download - fetch highest available quality
+                subprocess.run([
+                    "yt-dlp",
+                    "-f", "bestvideo+bestaudio/best",
+                    "--merge-output-format", "mp4",
+                    "-o", out_template,
+                    tweet_url
+                ])
                 
                 # Find the downloaded file
                 files = glob.glob(os.path.join(temp_dir, "*"))
+                files = [f for f in files if os.path.isfile(f)]
                 
                 if files:
                     file_path = files[0]
                     file_name = os.path.basename(file_path)
                     mime_type = mimetypes.guess_type(file_path)[0] or "video/mp4"
                     
-                    # Show video preview in the app
-                    st.video(open(file_path, 'rb').read())
-                    
-                    # Provide download button
                     with open(file_path, "rb") as f:
-                        st.success("Download complete!")
-                        st.download_button(
-                            label="⬇️ Click here to download the video",
-                            data=f,
-                            file_name=file_name,
-                            mime=mime_type
-                        )
+                        data = f.read()
+                    
+                    st.session_state.media_data = data
+                    st.session_state.media_name = file_name
+                    st.session_state.media_type = "video"
+                    st.session_state.media_mime = mime_type
+                    st.session_state.previews = []
+                    st.session_state.last_url = tweet_url
+                    st.session_state.status_message = "success_video"
                 else:
-                    st.error("Failed to download video. Twitter might be rate-limiting this server.")
+                    st.session_state.status_message = "error_video"
             
             else:
                 # --- NO VIDEO, TRY IMAGES ---
@@ -68,53 +84,88 @@ if st.button("Download Media", type="primary"):
                 
                 # Find all downloaded images (gallery-dl sometimes creates subfolders)
                 files = glob.glob(os.path.join(temp_dir, "**", "*"), recursive=True)
-                files = [f for f in files if os.path.isfile(f)] # Filter out directories
+                files = [f for f in files if os.path.isfile(f)]  # Filter out directories
                 
                 if files:
-                    st.success("Download complete!")
-                    
-                    # If only one image, provide direct download
                     if len(files) == 1:
                         file_path = files[0]
                         file_name = os.path.basename(file_path)
                         mime_type = mimetypes.guess_type(file_path)[0] or "image/jpeg"
                         
-                        st.image(file_path, caption=file_name, use_column_width=True)
-                        
                         with open(file_path, "rb") as f:
-                            st.download_button(
-                                label="⬇️ Click here to download the image",
-                                data=f,
-                                file_name=file_name,
-                                mime=mime_type
-                            )
+                            data = f.read()
+                        
+                        st.session_state.media_data = data
+                        st.session_state.media_name = file_name
+                        st.session_state.media_type = "image"
+                        st.session_state.media_mime = mime_type
+                        st.session_state.previews = [(data, file_name)]
+                        st.session_state.last_url = tweet_url
+                        st.session_state.status_message = "success_image_single"
                     else:
-                        # If multiple images, show them and zip them for download
-                        st.write(f"Found {len(files)} images!")
+                        # Multiple images - load all into memory and zip
+                        previews = []
+                        for f_path in files:
+                            with open(f_path, "rb") as f:
+                                img_data = f.read()
+                            previews.append((img_data, os.path.basename(f_path)))
                         
-                        # Show a preview grid
-                        st.session_state['previews'] = []
-                        cols = st.columns(3)
-                        for idx, f_path in enumerate(files):
-                            with cols[idx % 3]:
-                                st.image(f_path, use_column_width=True)
+                        # Zip the files in memory
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, 'w') as zipf:
+                            for img_data, fname in previews:
+                                zipf.writestr(fname, img_data)
+                        zip_data = zip_buffer.getvalue()
                         
-                        # Zip the files
-                        zip_path = os.path.join(temp_dir, "twitter_images.zip")
-                        with zipfile.ZipFile(zip_path, 'w') as zipf:
-                            for f_path in files:
-                                zipf.write(f_path, os.path.basename(f_path))
-                                
-                        # Provide download button for the ZIP
-                        with open(zip_path, "rb") as f:
-                            st.download_button(
-                                label="⬇️ Click here to download all images (ZIP)",
-                                data=f,
-                                file_name="twitter_images.zip",
-                                mime="application/zip"
-                            )
+                        st.session_state.media_data = zip_data
+                        st.session_state.media_name = "twitter_images.zip"
+                        st.session_state.media_type = "zip"
+                        st.session_state.media_mime = "application/zip"
+                        st.session_state.previews = previews
+                        st.session_state.last_url = tweet_url
+                        st.session_state.status_message = "success_image_multi"
                 else:
-                    st.error("Failed to download images. The link might be text-only, private, or rate-limited by Twitter.")
+                    st.session_state.status_message = "error_image"
+
+# --- Display media from session state (persists across reruns and tab switches) ---
+if st.session_state.status_message == "success_video":
+    st.success("Download complete!")
+    st.video(st.session_state.media_data)
+    st.download_button(
+        label="⬇️ Click here to download the video",
+        data=st.session_state.media_data,
+        file_name=st.session_state.media_name,
+        mime=st.session_state.media_mime,
+        key=f"dl_video_{st.session_state.last_url}"
+    )
+elif st.session_state.status_message == "success_image_single":
+    st.success("Download complete!")
+    st.image(st.session_state.media_data, caption=st.session_state.media_name, use_column_width=True)
+    st.download_button(
+        label="⬇️ Click here to download the image",
+        data=st.session_state.media_data,
+        file_name=st.session_state.media_name,
+        mime=st.session_state.media_mime,
+        key=f"dl_img_{st.session_state.last_url}"
+    )
+elif st.session_state.status_message == "success_image_multi":
+    st.success("Download complete!")
+    st.write(f"Found {len(st.session_state.previews)} images!")
+    cols = st.columns(3)
+    for idx, (img_data, caption) in enumerate(st.session_state.previews):
+        with cols[idx % 3]:
+            st.image(img_data, caption=caption, use_column_width=True)
+    st.download_button(
+        label="⬇️ Click here to download all images (ZIP)",
+        data=st.session_state.media_data,
+        file_name="twitter_images.zip",
+        mime="application/zip",
+        key=f"dl_zip_{st.session_state.last_url}"
+    )
+elif st.session_state.status_message == "error_video":
+    st.error("Failed to download video. Twitter might be rate-limiting this server.")
+elif st.session_state.status_message == "error_image":
+    st.error("Failed to download images. The link might be text-only, private, or rate-limited by Twitter.")
 
 # --- Footer Note ---
 st.markdown("---")
