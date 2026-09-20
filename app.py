@@ -1,59 +1,139 @@
+# app.py
 import streamlit as st
-import requests
-import re
 import os
-import hashlib
+import subprocess
+import tempfile
+import glob
 import mimetypes
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+import hashlib
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="Twitter / X Media Downloader", 
-    page_icon="🐦", 
+    page_title="Twitter Media Downloader",
+    page_icon="🐦",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# --- Custom CSS ---
+# --- Custom CSS for Premium UI ---
 st.markdown("""
 <style>
+    /* Main container padding */
     .block-container {
-        padding-top: 2.5rem;
+        padding-top: 3rem;
         padding-bottom: 2rem;
-        max-width: 850px;
+        max-width: 900px;
     }
-    #MainMenu, footer, header {visibility: hidden;}
 
+    /* Hide Streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    /* Typography and Header */
     .main-title {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         font-weight: 800;
-        font-size: 2.3rem;
+        font-size: 2.5rem;
         color: #0F1419;
         text-align: center;
-        margin-bottom: 0.3rem;
+        margin-bottom: 0.5rem;
     }
     .sub-title {
         text-align: center;
         color: #536471;
-        font-size: 1rem;
-        margin-bottom: 2rem;
+        font-size: 1.1rem;
+        margin-bottom: 2.5rem;
     }
+
+    /* Input Field Styling */
     .stTextInput > div > div > input {
-        border-radius: 14px !important;
-        padding: 14px 18px !important;
-        font-size: 15px !important;
+        border-radius: 16px !important;
+        padding: 16px 20px !important;
+        font-size: 16px !important;
+        border: 2px solid #EFF3F4 !important;
+        background-color: #EFF3F4 !important;
+        color: #0F1419 !important;
+        transition: all 0.2s ease-in-out !important;
     }
+    .stTextInput > div > div > input:focus {
+        border-color: #1DA1F2 !important;
+        background-color: #ffffff !important;
+        box-shadow: 0 0 0 4px rgba(29, 161, 242, 0.1) !important;
+    }
+
+    /* Primary Action Button (Fetch) */
+    div.stButton > button:first-child {
+        background-color: #0F1419;
+        color: white;
+        font-size: 16px;
+        font-weight: 700;
+        padding: 12px 24px;
+        border: none;
+        border-radius: 9999px; /* Perfect pill shape */
+        width: 100%;
+        transition: background-color 0.2s ease, transform 0.1s ease;
+    }
+    div.stButton > button:first-child:hover {
+        background-color: #272C30;
+        color: white;
+    }
+    div.stButton > button:first-child:active {
+        transform: scale(0.98);
+    }
+
+    /* Download Button */
+    div.stDownloadButton > button:first-child {
+        background-color: #1DA1F2;
+        color: white;
+        font-size: 15px;
+        font-weight: 700;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 9999px;
+        width: 100%;
+        box-shadow: 0 4px 12px rgba(29, 161, 242, 0.2);
+        transition: background-color 0.2s ease, transform 0.1s ease;
+        margin-top: 10px;
+    }
+    div.stDownloadButton > button:first-child:hover {
+        background-color: #1A8CD8;
+        color: white;
+    }
+    div.stDownloadButton > button:first-child:active {
+        transform: scale(0.98);
+    }
+
+    /* Media Containers */
     .media-card {
         background: #ffffff;
-        border-radius: 14px;
-        padding: 14px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        border-radius: 16px;
+        padding: 15px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
         border: 1px solid #EFF3F4;
-        margin-bottom: 16px;
+        margin-bottom: 20px;
     }
+    
+    /* Dark mode support */
     @media (prefers-color-scheme: dark) {
         .main-title { color: #E7E9EA; }
         .sub-title { color: #71767B; }
+        .stTextInput > div > div > input {
+            background-color: #202327 !important;
+            border-color: #202327 !important;
+            color: #E7E9EA !important;
+        }
+        .stTextInput > div > div > input:focus {
+            background-color: #000000 !important;
+        }
+        div.stButton > button:first-child {
+            background-color: #EFF3F4;
+            color: #0F1419;
+        }
+        div.stButton > button:first-child:hover {
+            background-color: #D7DBDC;
+            color: #0F1419;
+        }
         .media-card {
             background: #15202B;
             border: 1px solid #38444D;
@@ -62,265 +142,176 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- Header Section ---
 st.markdown('<div class="main-title">X / Twitter Downloader 🐦</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">High-res multi-engine extractor (Images, Videos, GIFs) without requiring cookies.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Easily download mixed media (multiple videos, GIFs, and images) from any post.</div>', unsafe_allow_html=True)
 
-# --- Session State ---
+# --- Initialize session state ---
 if 'media_items' not in st.session_state:
     st.session_state.media_items = []
     st.session_state.last_url = None
-    st.session_state.status = None
-    st.session_state.error = None
+    st.session_state.status_message = None
+    st.session_state.error_details = None
 
-# --- Helper Functions ---
-
-def extract_tweet_id(url: str):
-    """Extract numeric tweet ID from any X/Twitter URL variant."""
-    match = re.search(r'(?:twitter\.com|x\.com)/[^/]+/status/(\d+)', url)
-    return match.group(1) if match else None
-
-def optimize_image_url(url: str) -> str:
-    """Ensure images are fetched at maximum resolution (name=orig)."""
-    parsed = urlparse(url)
-    qs = parse_qs(parsed.query)
-    qs['name'] = ['orig']
-    new_query = urlencode(qs, doseq=True)
-    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
-
-def fetch_via_fxtwitter(tweet_id: str):
-    """Engine 1: Primary extraction via syndication resolver."""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    endpoint = f"https://api.fxtwitter.com/status/{tweet_id}"
-    
-    resp = requests.get(endpoint, headers=headers, timeout=10)
-    if resp.status_code != 200:
-        return None
-    
-    data = resp.json()
-    if data.get("code") != 200 or "tweet" not in data:
-        return None
-
-    tweet = data["tweet"]
-    media_data = tweet.get("media", {})
-    results = []
-
-    # Process all media entities
-    all_media = media_data.get("all", [])
-    for idx, item in enumerate(all_media):
-        mtype = item.get("type")
-        direct_url = None
-
-        if mtype == "photo":
-            direct_url = optimize_image_url(item.get("url"))
-            item_type = "image"
-            ext = "jpg"
-        elif mtype in ("video", "gif"):
-            item_type = "video"
-            ext = "mp4"
-            # Choose highest bitrate variant if available
-            variants = item.get("variants", [])
-            if variants:
-                mp4_variants = [v for v in variants if v.get("content_type") == "video/mp4"]
-                if mp4_variants:
-                    best = max(mp4_variants, key=lambda v: v.get("bitrate", 0))
-                    direct_url = best.get("url")
-            if not direct_url:
-                direct_url = item.get("url")
-        else:
-            continue
-
-        if direct_url:
-            filename = f"twitter_{tweet_id}_{idx + 1}.{ext}"
-            results.append({
-                "url": direct_url,
-                "type": item_type,
-                "filename": filename
-            })
-
-    return results
-
-def fetch_via_vxtwitter(tweet_id: str):
-    """Engine 2: Secondary fallback extraction."""
-    headers = {"User-Agent": "Mozilla/5.0"}
-    endpoint = f"https://api.vxtwitter.com/Twitter/status/{tweet_id}"
-    
-    resp = requests.get(endpoint, headers=headers, timeout=10)
-    if resp.status_code != 200:
-        return None
-        
-    data = resp.json()
-    media_list = data.get("media_extended", [])
-    results = []
-    
-    for idx, item in enumerate(media_list):
-        mtype = item.get("type")
-        url = item.get("url")
-        if not url:
-            continue
-
-        if mtype == "image":
-            url = optimize_image_url(url)
-            results.append({
-                "url": url,
-                "type": "image",
-                "filename": f"twitter_{tweet_id}_{idx + 1}.jpg"
-            })
-        elif mtype in ("video", "gif"):
-            results.append({
-                "url": url,
-                "type": "video",
-                "filename": f"twitter_{tweet_id}_{idx + 1}.mp4"
-            })
-            
-    return results
-
-def fetch_via_ytdlp(url: str):
-    """Engine 3: In-memory yt-dlp metadata extraction."""
-    import yt_dlp
-    
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': False,
-        'skip_download': True
-    }
-    
-    results = []
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        if not info:
-            return None
-            
-        entries = info.get('entries', [info])
-        for idx, entry in enumerate(entries):
-            formats = entry.get('formats', [])
-            # Find best MP4 video
-            valid_mp4s = [f for f in formats if f.get('ext') == 'mp4' and f.get('vcodec') != 'none']
-            best_url = None
-            if valid_mp4s:
-                best = max(valid_mp4s, key=lambda f: f.get('tbr', 0) or 0)
-                best_url = best.get('url')
-            elif entry.get('url'):
-                best_url = entry.get('url')
-
-            if best_url:
-                results.append({
-                    "url": best_url,
-                    "type": "video",
-                    "filename": f"twitter_video_{idx + 1}.mp4"
-                })
-    return results
-
-def download_asset(url: str):
-    """Download binary asset from CDN."""
-    headers = {"User-Agent": "Mozilla/5.0"}
-    res = requests.get(url, headers=headers, stream=True, timeout=15)
-    if res.status_code == 200:
-        return res.content
-    return None
-
-# --- UI & Interaction ---
-
-tweet_url = st.text_input(
-    "URL Input", 
-    placeholder="https://x.com/username/status/123456789...", 
-    label_visibility="collapsed"
-)
+# --- Input Area ---
+st.write("") # Spacer
+tweet_url = st.text_input("URL Input", placeholder="Paste X/Twitter link here... (e.g., https://x.com/user/status/123)", label_visibility="collapsed")
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    show_preview = st.toggle("Show Previews", value=True)
+    show_preview = st.toggle("Show media previews", value=True, help="Toggle to display or hide the media before downloading.")
 with col2:
-    fetch_clicked = st.button("Extract Media", use_container_width=True)
+    fetch_clicked = st.button("Get Media")
 
+st.markdown("<br>", unsafe_allow_html=True) # Spacer
+
+# --- Download Logic ---
 if fetch_clicked:
     if not tweet_url:
-        st.warning("⚠️ Please provide a valid link.")
+        st.warning("⚠️ Please enter a valid URL.")
     else:
-        tweet_id = extract_tweet_id(tweet_url)
-        
-        if not tweet_id:
-            st.error("❌ Could not parse a valid Tweet/Post ID from the supplied URL.")
-        else:
-            with st.spinner("Resolving media sources..."):
-                items = None
-                
-                # Step 1: Attempt FixTweet resolver
+        with tempfile.TemporaryDirectory(prefix="twitter_dl_") as temp_dir:
+            
+            with st.spinner("Analyzing link and extracting all available media..."):
                 try:
-                    items = fetch_via_fxtwitter(tweet_id)
-                except Exception:
-                    items = None
-                
-                # Step 2: Attempt VxTwitter fallback
-                if not items:
-                    try:
-                        items = fetch_via_vxtwitter(tweet_id)
-                    except Exception:
-                        items = None
-                        
-                # Step 3: Attempt native yt-dlp fallback
-                if not items:
-                    try:
-                        items = fetch_via_ytdlp(tweet_url)
-                    except Exception as e:
-                        st.session_state.error = str(e)
+                    # 1. Fetch videos/GIFs using yt-dlp with updated API and impersonation
+                    subprocess.run([
+                        "yt-dlp",
+                        # Use a more stable API endpoint for public tweets
+                        "--extractor-args", "twitter:api=syndication",
+                        # Impersonate a real browser to avoid user-agent based blocks
+                        "--impersonate", "chrome",
+                        "-f", "bestvideo+bestaudio/best",
+                        "--merge-output-format", "mp4",
+                        "-o", os.path.join(temp_dir, "ytdlp_vid_%(id)s_%(autonumber)s.%(ext)s"),
+                        tweet_url
+                    ], capture_output=True)
 
-                if items:
-                    downloaded_items = []
-                    for it in items:
-                        data = download_asset(it["url"])
-                        if data:
-                            mime, _ = mimetypes.guess_type(it["filename"])
-                            downloaded_items.append({
-                                "filename": it["filename"],
-                                "type": it["type"],
-                                "data": data,
-                                "mime": mime or "application/octet-stream"
-                            })
+                    # 2. Fetch images using gallery-dl with a rate-limit friendly config
+                    subprocess.run([
+                        "gallery-dl",
+                        # Configure the tool to wait if it hits a rate limit
+                        "--config-ignore",
+                        "--option", "extractor.twitter.ratelimit=wait",
+                        "--directory", temp_dir,
+                        tweet_url
+                    ], capture_output=True)
+
+                    # 3. Collect ALL downloaded files recursively
+                    all_files = glob.glob(os.path.join(temp_dir, "**", "*"), recursive=True)
+                    file_paths = [f for f in all_files if os.path.isfile(f)]
+
+                    valid_video_exts = [".mp4", ".webm", ".mkv"]
+                    valid_image_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
                     
-                    if downloaded_items:
-                        st.session_state.media_items = downloaded_items
+                    extracted_media = []
+                    seen_hashes = set()
+
+                    for fp in file_paths:
+                        basename = os.path.basename(fp)
+                        basename_lower = basename.lower()
+                        
+                        is_video = any(basename_lower.endswith(ext) for ext in valid_video_exts)
+                        is_image = any(basename_lower.endswith(ext) for ext in valid_image_exts)
+
+                        # Skip temporary or unwanted files entirely
+                        if not (is_video or is_image):
+                            continue
+                            
+                        # DEDUPLICATION FIX: gallery-dl sometimes downloads identical videos alongside yt-dlp.
+                        # We force the app to ignore ANY video that was not downloaded by yt-dlp.
+                        if is_video and not basename.startswith("ytdlp_vid_"):
+                            continue
+                            
+                        # Read file data into memory
+                        with open(fp, "rb") as f:
+                            data = f.read()
+                        
+                        # Deduplicate images (If gallery-dl downloads multiple sizes/thumbnails of the exact same image)
+                        file_hash = hashlib.md5(data).hexdigest()
+                        if file_hash in seen_hashes:
+                            continue
+                        seen_hashes.add(file_hash)
+
+                        # Determine Mime Type
+                        mime_type, _ = mimetypes.guess_type(fp)
+                        if not mime_type:
+                            mime_type = "application/octet-stream"
+
+                        # Set type for UI preview handling
+                        media_type = "video" if is_video else "image"
+
+                        extracted_media.append({
+                            "name": basename,
+                            "data": data,
+                            "mime": mime_type,
+                            "type": media_type
+                        })
+
+                    if extracted_media:
+                        st.session_state.media_items = extracted_media
                         st.session_state.last_url = tweet_url
-                        st.session_state.status = "success"
+                        st.session_state.status_message = "success"
                     else:
-                        st.session_state.status = "error_download"
-                else:
-                    st.session_state.status = "error_not_found"
+                        st.session_state.status_message = "error_no_media"
+                
+                except Exception as e:
+                    st.session_state.status_message = "error_general"
+                    st.session_state.error_details = str(e)
 
 st.markdown("---")
 
-# --- Results Presentation ---
-if st.session_state.status == "success":
-    st.success(f"✅ Found and extracted {len(st.session_state.media_items)} media asset(s).")
+# --- Display Results ---
+if st.session_state.status_message == "success":
+    st.success(f"✅ **Successfully extracted {len(st.session_state.media_items)} media item(s)!**")
+    st.write("")
     
+    # Create a clean 2-column grid for the media items
     cols = st.columns(2)
+    
     for idx, item in enumerate(st.session_state.media_items):
-        with cols[idx % 2]:
+        with cols[idx % 2]: # Distribute evenly between left and right columns
             st.markdown('<div class="media-card">', unsafe_allow_html=True)
             
+            # 1. Preview
             if show_preview:
                 if item["type"] == "video":
                     st.video(item["data"])
                 else:
                     st.image(item["data"], use_column_width=True)
-                    
+            else:
+                # Fallback if preview is toggled off
+                icon = "🎥" if item["type"] == "video" else "📸"
+                st.markdown(f"<div style='text-align: center; padding: 20px;'><h3>{icon} {item['type'].title()} File</h3></div>", unsafe_allow_html=True)
+            
+            # 2. Individual Download Button
             st.download_button(
-                label=f"💾 Download {item['type'].capitalize()}",
+                label=f"Download {item['type'].title()}",
                 data=item["data"],
-                file_name=item["filename"],
+                file_name=item["name"],
                 mime=item["mime"],
-                key=f"dl_btn_{idx}"
+                key=f"dl_{idx}_{st.session_state.last_url}"
             )
+            
             st.markdown('</div>', unsafe_allow_html=True)
 
-elif st.session_state.status == "error_not_found":
-    st.error("🚫 No media found. The post may contain only text, or access was restricted.")
-elif st.session_state.status == "error_download":
-    st.error("⚠️ Failed while transferring binary media data from CDN servers.")
+elif st.session_state.status_message == "error_no_media":
+    st.error("🚫 **Failed to fetch media.** The link might be text-only, from a private account, or the server is temporarily rate-limited by X.")
+elif st.session_state.status_message == "error_general":
+    st.error(f"⚠️ **An unexpected error occurred:** {st.session_state.error_details}")
 
-# Clear Cache
-if st.session_state.media_items:
-    if st.button("Clear Results"):
+# --- Footer Disclaimer ---
+st.markdown("<br><br>", unsafe_allow_html=True)
+
+# Centered Clear Cache Button
+cc_col1, cc_col2, cc_col3 = st.columns([1, 1, 1])
+with cc_col2:
+    if st.button("Clear Cache", use_container_width=True):
         st.session_state.media_items = []
-        st.session_state.status = None
+        st.session_state.last_url = None
+        st.session_state.status_message = None
+        st.session_state.error_details = None
         st.rerun()
+
+st.caption("ℹ️ **Note:** X/Twitter limits automated access. If you experience errors, it usually means the server's IP has been temporarily restricted.")
+st.markdown('<div style="text-align: center;"><a href="https://github.com/JustToTryModels/Twitter-Downloader/blob/main/app.py" target="_blank" style="color: #536471; text-decoration: none; font-size: 14px;">View Source Code on GitHub 💻</a></div>', unsafe_allow_html=True)
