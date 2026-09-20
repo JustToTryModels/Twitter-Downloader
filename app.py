@@ -1,6 +1,5 @@
 import html
 import re
-import urllib.parse
 from typing import Any, Dict, List, Optional
 import requests
 import streamlit as st
@@ -95,7 +94,7 @@ st.markdown(
         box-shadow: 0 2px 8px rgba(0,0,0,0.04);
     }
     
-    /* Native Buttons */
+    /* Standard Buttons */
     div.stButton > button {
         border-radius: 9999px !important;
         font-weight: 700 !important;
@@ -109,9 +108,22 @@ st.markdown(
         background-color: #272C30 !important;
     }
 
-    /* Client-Side High-Speed Download Button */
+    /* Download Buttons */
+    div.stDownloadButton > button {
+        border-radius: 9999px !important;
+        font-weight: 700 !important;
+        background-color: #00BA7C !important;
+        color: white !important;
+        border: none !important;
+        width: 100% !important;
+    }
+    div.stDownloadButton > button:hover {
+        background-color: #009e69 !important;
+    }
+
+    /* Client-Side Image Download Button */
     .dl-btn-container {
-        margin-top: 10px;
+        margin-top: 8px;
     }
     .instant-dl-btn {
         display: flex;
@@ -127,14 +139,11 @@ st.markdown(
         border: none;
         cursor: pointer;
         text-decoration: none !important;
-        transition: background-color 0.2s ease, transform 0.1s ease;
+        transition: background-color 0.2s ease;
         box-sizing: border-box;
     }
     .instant-dl-btn:hover {
         background-color: #1A8CD8;
-    }
-    .instant-dl-btn:active {
-        transform: scale(0.98);
     }
 
     /* Dark Mode */
@@ -167,7 +176,7 @@ st.markdown(
 )
 
 
-# --- Core Twitter Extraction Engine (Metadata Only - 0 Media Data Used) ---
+# --- Core Twitter Extraction Engine (Metadata Only - 0 Media Data Transferred) ---
 class TwitterMediaEngine:
     @staticmethod
     def extract_status_id(url: str) -> Optional[str]:
@@ -379,9 +388,25 @@ class TwitterMediaEngine:
         }
 
 
-# --- Client-Side High-Speed Download Component Builder ---
-def render_instant_download_button(url: str, filename: str, label: str) -> str:
-    """Creates a zero-latency client-side JS downloader component."""
+# --- Video Stream Proxy Engine (Bypasses Twitter CORS) ---
+def fetch_video_binary(url: str) -> Optional[bytes]:
+    """Streams video bytes through Python to avoid browser CORS blocks."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Referer": "https://twitter.com/",
+    }
+    try:
+        r = requests.get(url, headers=headers, stream=True, timeout=25)
+        if r.status_code == 200:
+            return r.content
+    except Exception:
+        pass
+    return None
+
+
+# --- Client-Side High-Speed Image Downloader ---
+def render_instant_image_download_button(url: str, filename: str, label: str) -> str:
+    """Zero-server-bandwidth client-side image downloader."""
     safe_url = html.escape(url)
     safe_filename = html.escape(filename)
     safe_label = html.escape(label)
@@ -389,21 +414,20 @@ def render_instant_download_button(url: str, filename: str, label: str) -> str:
 
     return f"""
     <div class="dl-btn-container">
-        <button id="{btn_id}" class="instant-dl-btn" onclick="startDirectDownload('{safe_url}', '{safe_filename}', '{btn_id}', '{safe_label}')">
+        <button id="{btn_id}" class="instant-dl-btn" onclick="downloadImageDirect('{safe_url}', '{safe_filename}', '{btn_id}', '{safe_label}')">
             ⬇️ {safe_label}
         </button>
     </div>
     <script>
-    function startDirectDownload(url, filename, btnId, origLabel) {{
+    function downloadImageDirect(url, filename, btnId, origLabel) {{
         const btn = document.getElementById(btnId);
-        btn.innerText = "⏳ Downloading...";
-        btn.style.opacity = "0.7";
+        btn.innerText = "⏳ Saving...";
         btn.disabled = true;
 
         fetch(url, {{ mode: 'cors' }})
-            .then(response => {{
-                if (!response.ok) throw new Error('Network response was not ok');
-                return response.blob();
+            .then(res => {{
+                if (!res.ok) throw new Error('Network response was not ok');
+                return res.blob();
             }})
             .then(blob => {{
                 const blobUrl = window.URL.createObjectURL(blob);
@@ -416,25 +440,22 @@ def render_instant_download_button(url: str, filename: str, label: str) -> str:
                 window.URL.revokeObjectURL(blobUrl);
                 document.body.removeChild(a);
 
-                btn.innerText = "✅ Downloaded!";
+                btn.innerText = "✅ Saved!";
                 btn.style.backgroundColor = "#00BA7C";
                 setTimeout(() => {{
                     btn.innerText = "⬇️ " + origLabel;
                     btn.style.backgroundColor = "#1DA1F2";
-                    btn.style.opacity = "1";
                     btn.disabled = false;
                 }}, 2500);
             }})
-            .catch(err => {{
-                console.warn('Direct blob failed, falling back to direct tab stream:', err);
-                // Instant fallback
+            .catch(() => {{
+                // Direct fallback
                 const a = document.createElement('a');
                 a.href = url;
                 a.target = '_blank';
                 a.download = filename;
                 a.click();
                 btn.innerText = "⬇️ " + origLabel;
-                btn.style.opacity = "1";
                 btn.disabled = false;
             }});
     }}
@@ -463,9 +484,11 @@ if fetch_btn:
     if not tweet_url.strip():
         st.warning("Please provide a valid tweet URL.")
     else:
-        with st.spinner("Extracting media links..."):
+        with st.spinner("Resolving media links..."):
             engine_result = TwitterMediaEngine.resolve_all(tweet_url.strip())
             st.session_state["result"] = engine_result
+            # Clear previous video cache when extracting a new tweet
+            st.session_state.pop("video_cache", None)
 
 # --- Render Results ---
 if "result" in st.session_state:
@@ -503,23 +526,52 @@ if "result" in st.session_state:
             with target_col:
                 st.markdown('<div class="media-card">', unsafe_allow_html=True)
                 
-                # Previews only stream if checked
+                # Previews (Only streamed when checkbox is ON)
                 if show_previews:
                     if item["type"] == "video":
                         st.video(item["url"])
                     else:
                         st.image(item["url"], use_container_width=True)
 
-                # Zero-Data-Waste Instant Download Button
+                # --- High-Speed Downloads ---
                 btn_label = f"Download {item['type'].upper()} ({idx+1}/{media_count})"
-                btn_html = render_instant_download_button(item["url"], item["filename"], btn_label)
-                st.components.v1.html(btn_html, height=52)
+
+                if item["type"] == "image":
+                    # Instant client-side direct download (Zero server bandwidth)
+                    img_html = render_instant_image_download_button(item["url"], item["filename"], btn_label)
+                    st.components.v1.html(img_html, height=50)
+
+                else:
+                    # Video: Bypasses Twitter CORS by downloading directly as a true .mp4 file
+                    video_cache = st.session_state.setdefault("video_cache", {})
+                    cache_key = item["url"]
+
+                    if cache_key in video_cache:
+                        # Video file ready in memory: Save to disk
+                        st.download_button(
+                            label=f"💾 Save {item['filename']} to Device",
+                            data=video_cache[cache_key],
+                            file_name=item["filename"],
+                            mime="video/mp4",
+                            key=f"dl_ready_{res['tweet_id']}_{idx}",
+                            use_container_width=True
+                        )
+                    else:
+                        # Fetches only this video on-demand (Does not touch images or other videos)
+                        if st.button(f"⬇️ {btn_label}", key=f"fetch_vid_{res['tweet_id']}_{idx}", use_container_width=True):
+                            with st.spinner("Downloading video file from X CDN..."):
+                                vid_bytes = fetch_video_binary(item["url"])
+                                if vid_bytes:
+                                    video_cache[cache_key] = vid_bytes
+                                    st.rerun()
+                                else:
+                                    st.error("Could not download video. Stream may be restricted.")
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("<hr style='margin-top: 2rem; margin-bottom: 1.5rem; opacity: 0.2;'>", unsafe_allow_html=True)
 
-        # Clear Cache Button: Strictly at the bottom and only visible when media is loaded
+        # Clear Cache Button: ONLY displayed at the very bottom when media is loaded
         if st.button("🗑️ Clear Cache & Reset", use_container_width=True):
             st.cache_data.clear()
             st.session_state.clear()
