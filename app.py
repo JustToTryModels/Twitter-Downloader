@@ -1,578 +1,311 @@
-import html
-import re
-from typing import Any, Dict, List, Optional
-import requests
+# app.py
 import streamlit as st
-import yt_dlp
+import os
+import subprocess
+import tempfile
+import glob
+import mimetypes
+import hashlib
 
-# --- Streamlit Page Setup ---
+# --- Page Configuration ---
 st.set_page_config(
-    page_title="Pro X/Twitter Downloader",
-    page_icon="🐦",
+    page_title="Twitter Media Downloader", 
+    page_icon="🐦", 
     layout="centered",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="collapsed"
 )
 
-# --- High-Performance CSS ---
-st.markdown(
-    """
+# --- Custom CSS for Premium UI ---
+st.markdown("""
 <style>
+    /* Main container padding */
     .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2.5rem;
-        max-width: 760px;
+        padding-top: 3rem;
+        padding-bottom: 2rem;
+        max-width: 900px;
     }
-    #MainMenu, footer, header {visibility: hidden;}
 
+    /* Hide Streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    /* Typography and Header */
     .main-title {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        font-weight: 900;
-        font-size: 2.4rem;
+        font-weight: 800;
+        font-size: 2.5rem;
+        color: #0F1419;
         text-align: center;
-        letter-spacing: -0.5px;
-        margin-bottom: 0.2rem;
+        margin-bottom: 0.5rem;
     }
     .sub-title {
         text-align: center;
-        color: #71767B;
-        font-size: 1rem;
-        margin-bottom: 1.6rem;
+        color: #536471;
+        font-size: 1.1rem;
+        margin-bottom: 2.5rem;
     }
-    
-    /* Input Box */
+
+    /* Input Field Styling */
     .stTextInput > div > div > input {
-        border-radius: 12px !important;
-        padding: 14px 18px !important;
+        border-radius: 16px !important;
+        padding: 16px 20px !important;
         font-size: 16px !important;
-        background-color: #F7F9F9 !important;
-        border: 2px solid #E1E8ED !important;
-        transition: all 0.2s ease;
+        border: 2px solid #EFF3F4 !important;
+        background-color: #EFF3F4 !important;
+        color: #0F1419 !important;
+        transition: all 0.2s ease-in-out !important;
     }
     .stTextInput > div > div > input:focus {
         border-color: #1DA1F2 !important;
         background-color: #ffffff !important;
-        box-shadow: 0 0 0 3px rgba(29, 161, 242, 0.15) !important;
+        box-shadow: 0 0 0 4px rgba(29, 161, 242, 0.1) !important;
     }
-    
-    /* Tweet Card */
-    .tweet-card {
-        background: #ffffff;
-        border: 1px solid #E1E8ED;
-        border-radius: 16px;
-        padding: 18px 20px;
-        margin: 18px 0;
-        box-shadow: 0 3px 10px rgba(0,0,0,0.03);
+
+    /* Primary Action Button (Fetch) */
+    div.stButton > button:first-child {
+        background-color: #0F1419;
+        color: white;
+        font-size: 16px;
+        font-weight: 700;
+        padding: 12px 24px;
+        border: none;
+        border-radius: 9999px; /* Perfect pill shape */
+        width: 100%;
+        transition: background-color 0.2s ease, transform 0.1s ease;
     }
-    .tweet-author {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 10px;
+    div.stButton > button:first-child:hover {
+        background-color: #272C30;
+        color: white;
     }
-    .tweet-avatar {
-        width: 44px;
-        height: 44px;
-        border-radius: 50%;
-        background-color: #E1E8ED;
-        object-fit: cover;
+    div.stButton > button:first-child:active {
+        transform: scale(0.98);
     }
-    .tweet-text {
-        font-size: 1.02rem;
-        line-height: 1.45;
-        color: #0F1419;
-        white-space: pre-wrap;
-        word-break: break-word;
+
+    /* Download Button */
+    div.stDownloadButton > button:first-child {
+        background-color: #1DA1F2;
+        color: white;
+        font-size: 15px;
+        font-weight: 700;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 9999px;
+        width: 100%;
+        box-shadow: 0 4px 12px rgba(29, 161, 242, 0.2);
+        transition: background-color 0.2s ease, transform 0.1s ease;
+        margin-top: 10px;
     }
-    
-    /* Media Cards */
+    div.stDownloadButton > button:first-child:hover {
+        background-color: #1A8CD8;
+        color: white;
+    }
+    div.stDownloadButton > button:first-child:active {
+        transform: scale(0.98);
+    }
+
+    /* Media Containers */
     .media-card {
         background: #ffffff;
+        border-radius: 16px;
+        padding: 15px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
         border: 1px solid #EFF3F4;
-        border-radius: 14px;
-        padding: 14px;
-        margin-bottom: 15px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        margin-bottom: 20px;
     }
     
-    /* Standard Buttons */
-    div.stButton > button {
-        border-radius: 9999px !important;
-        font-weight: 700 !important;
-        padding: 12px 24px !important;
-        background-color: #0F1419 !important;
-        color: white !important;
-        border: none !important;
-        transition: 0.2s;
-    }
-    div.stButton > button:hover {
-        background-color: #272C30 !important;
-    }
-
-    /* Download Buttons */
-    div.stDownloadButton > button {
-        border-radius: 9999px !important;
-        font-weight: 700 !important;
-        background-color: #00BA7C !important;
-        color: white !important;
-        border: none !important;
-        width: 100% !important;
-    }
-    div.stDownloadButton > button:hover {
-        background-color: #009e69 !important;
-    }
-
-    /* Client-Side Image Download Button */
-    .dl-btn-container {
-        margin-top: 8px;
-    }
-    .instant-dl-btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 100%;
-        background-color: #1DA1F2;
-        color: #ffffff !important;
-        font-weight: 700;
-        font-size: 0.95rem;
-        padding: 11px 16px;
-        border-radius: 9999px;
-        border: none;
-        cursor: pointer;
-        text-decoration: none !important;
-        transition: background-color 0.2s ease;
-        box-sizing: border-box;
-    }
-    .instant-dl-btn:hover {
-        background-color: #1A8CD8;
-    }
-
-    /* Dark Mode */
+    /* Dark mode support */
     @media (prefers-color-scheme: dark) {
-        .tweet-card {
-            background: #16181C;
-            border-color: #2F3336;
-        }
-        .tweet-text { color: #E7E9EA; }
-        .media-card {
-            background: #16181C;
-            border-color: #2F3336;
-        }
+        .main-title { color: #E7E9EA; }
+        .sub-title { color: #71767B; }
         .stTextInput > div > div > input {
             background-color: #202327 !important;
-            border-color: #2F3336 !important;
+            border-color: #202327 !important;
             color: #E7E9EA !important;
         }
-        div.stButton > button {
-            background-color: #EFF3F4 !important;
-            color: #0F1419 !important;
+        .stTextInput > div > div > input:focus {
+            background-color: #000000 !important;
         }
-        div.stButton > button:hover {
-            background-color: #D7DBDC !important;
+        div.stButton > button:first-child {
+            background-color: #EFF3F4;
+            color: #0F1419;
+        }
+        div.stButton > button:first-child:hover {
+            background-color: #D7DBDC;
+            color: #0F1419;
+        }
+        .media-card {
+            background: #15202B;
+            border: 1px solid #38444D;
         }
     }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
+# --- Header Section ---
+st.markdown('<div class="main-title">X / Twitter Downloader 🐦</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Easily download mixed media (multiple videos, GIFs, and images) from any post.</div>', unsafe_allow_html=True)
 
-# --- Core Twitter Extraction Engine (Metadata Only - 0 Media Data Transferred) ---
-class TwitterMediaEngine:
-    @staticmethod
-    def extract_status_id(url: str) -> Optional[str]:
-        """Extract status ID from any Twitter/X URL format."""
-        match = re.search(r"(?:twitter\.com|x\.com)/[^/]+/status/(\d+)", url)
-        return match.group(1) if match else None
+# --- Initialize session state ---
+if 'media_items' not in st.session_state:
+    st.session_state.media_items = []
+    st.session_state.last_url = None
+    st.session_state.status_message = None
+    st.session_state.error_details = None
 
-    @classmethod
-    def get_highest_resolution_image_url(cls, url: str) -> str:
-        """Forces Twitter image URLs to point directly to original uncompressed uploads."""
-        if "twimg.com" in url:
-            base = url.split("?")[0]
-            ext_match = re.search(r"\.(jpg|jpeg|png|webp)$", base, re.IGNORECASE)
-            ext = ext_match.group(1) if ext_match else "jpg"
-            clean_base = re.sub(r"\.(jpg|jpeg|png|webp)$", "", base, flags=re.IGNORECASE)
-            return f"{clean_base}?format={ext}&name=orig"
-        return url
+# --- Input Area ---
+st.write("") # Spacer
+tweet_url = st.text_input("URL Input", placeholder="Paste X/Twitter link here... (e.g., https://x.com/user/status/123)", label_visibility="collapsed")
 
-    @classmethod
-    def fetch_via_tier1_fxtwitter(cls, tweet_id: str) -> Optional[Dict[str, Any]]:
-        """Tier 1: Query FxTwitter API."""
-        try:
-            endpoint = f"https://api.fxtwitter.com/status/{tweet_id}"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            resp = requests.get(endpoint, headers=headers, timeout=5)
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-            tweet = data.get("tweet")
-            if not tweet:
-                return None
+col1, col2 = st.columns([3, 1])
+with col1:
+    show_preview = st.toggle("Show media previews", value=True, help="Toggle to display or hide the media before downloading.")
+with col2:
+    fetch_clicked = st.button("Get Media")
 
-            media_list = []
-            if "media" in tweet and "photos" in tweet["media"]:
-                for p in tweet["media"]["photos"]:
-                    orig_url = cls.get_highest_resolution_image_url(p.get("url", ""))
-                    ext = "png" if "format=png" in orig_url.lower() else "jpg"
-                    media_list.append({
-                        "type": "image",
-                        "url": orig_url,
-                        "filename": f"tweet_{tweet_id}_{len(media_list)+1}.{ext}"
-                    })
+st.markdown("<br>", unsafe_allow_html=True) # Spacer
 
-            if "media" in tweet and "videos" in tweet["media"]:
-                for v in tweet["media"]["videos"]:
-                    media_list.append({
-                        "type": "video",
-                        "url": v.get("url"),
-                        "filename": f"tweet_{tweet_id}_{len(media_list)+1}.mp4"
-                    })
-
-            return {
-                "author_name": tweet.get("author", {}).get("name", "Twitter User"),
-                "author_screen": tweet.get("author", {}).get("screen_name", "user"),
-                "author_avatar": tweet.get("author", {}).get("avatar_url", ""),
-                "text": tweet.get("text", ""),
-                "media": media_list,
-                "tier": "FxTwitter CDN Engine"
-            }
-        except Exception:
-            return None
-
-    @classmethod
-    def fetch_via_tier2_syndication(cls, tweet_id: str) -> Optional[Dict[str, Any]]:
-        """Tier 2: Query Twitter's official embedded widget CDN."""
-        try:
-            token = (int(tweet_id) / 1e15) * 3.141592653589793
-            endpoint = f"https://cdn.syndication.twimg.com/tweet-result?id={tweet_id}&token={token}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-                "Referer": "https://platform.twitter.com/",
-            }
-            resp = requests.get(endpoint, headers=headers, timeout=5)
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-
-            media_list = []
-            for p in data.get("photos", []):
-                orig_url = cls.get_highest_resolution_image_url(p.get("url", ""))
-                ext = "png" if "format=png" in orig_url.lower() else "jpg"
-                media_list.append({
-                    "type": "image",
-                    "url": orig_url,
-                    "filename": f"tweet_{tweet_id}_{len(media_list)+1}.{ext}"
-                })
-
-            if "video" in data:
-                variants = data["video"].get("variants", [])
-                mp4_variants = [v for v in variants if v.get("type") == "video/mp4" or "video/mp4" in v.get("src", "")]
-                if mp4_variants:
-                    best_variant = max(mp4_variants, key=lambda x: x.get("bitrate", 0))
-                    media_list.append({
-                        "type": "video",
-                        "url": best_variant.get("src"),
-                        "filename": f"tweet_{tweet_id}_{len(media_list)+1}.mp4"
-                    })
-
-            return {
-                "author_name": data.get("user", {}).get("name", "Twitter User"),
-                "author_screen": data.get("user", {}).get("screen_name", "user"),
-                "author_avatar": data.get("user", {}).get("profile_image_url_https", ""),
-                "text": data.get("text", ""),
-                "media": media_list,
-                "tier": "Syndication API Core"
-            }
-        except Exception:
-            return None
-
-    @classmethod
-    def fetch_via_tier3_vxtwitter(cls, tweet_id: str) -> Optional[Dict[str, Any]]:
-        """Tier 3: Query VxTwitter API."""
-        try:
-            endpoint = f"https://api.vxtwitter.com/Twitter/status/{tweet_id}"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            resp = requests.get(endpoint, headers=headers, timeout=5)
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-
-            media_list = []
-            for item in data.get("media_extended", []):
-                m_type = "video" if item.get("type") in ["video", "gif"] else "image"
-                url = item.get("url")
-                if m_type == "image":
-                    url = cls.get_highest_resolution_image_url(url)
-                    ext = "png" if ".png" in url.lower() else "jpg"
-                else:
-                    ext = "mp4"
-
-                media_list.append({
-                    "type": m_type,
-                    "url": url,
-                    "filename": f"tweet_{tweet_id}_{len(media_list)+1}.{ext}"
-                })
-
-            return {
-                "author_name": data.get("user_name", "Twitter User"),
-                "author_screen": data.get("user_screen_name", "user"),
-                "author_avatar": "",
-                "text": data.get("text", ""),
-                "media": media_list,
-                "tier": "VxTwitter Edge Resolver"
-            }
-        except Exception:
-            return None
-
-    @classmethod
-    def fetch_via_tier4_ytdlp(cls, url: str, tweet_id: str) -> Optional[Dict[str, Any]]:
-        """Tier 4: In-memory yt-dlp metadata resolver."""
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-            "extractor_args": {"twitter": {"api": ["syndication"]}},
-        }
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    return None
-
-                media_list = []
-                formats = info.get("formats", [])
-                mp4_formats = [f for f in formats if f.get("ext") == "mp4" and f.get("url")]
-                if mp4_formats:
-                    best = max(mp4_formats, key=lambda x: (x.get("tbr") or 0, x.get("height") or 0))
-                    media_list.append({
-                        "type": "video",
-                        "url": best["url"],
-                        "filename": f"tweet_{tweet_id}_1.mp4"
-                    })
-
-                return {
-                    "author_name": info.get("uploader", "Twitter User"),
-                    "author_screen": info.get("uploader_id", "user"),
-                    "author_avatar": "",
-                    "text": info.get("description", ""),
-                    "media": media_list,
-                    "tier": "In-Memory yt-dlp Core"
-                }
-        except Exception:
-            return None
-
-    @classmethod
-    def resolve_all(cls, raw_url: str) -> Dict[str, Any]:
-        """Tries all tiers sequentially to extract only metadata."""
-        tweet_id = cls.extract_status_id(raw_url)
-        if not tweet_id:
-            return {"success": False, "error": "Invalid Twitter/X URL. Make sure it contains `/status/<ID>`."}
-
-        tiers = [
-            lambda: cls.fetch_via_tier1_fxtwitter(tweet_id),
-            lambda: cls.fetch_via_tier2_syndication(tweet_id),
-            lambda: cls.fetch_via_tier3_vxtwitter(tweet_id),
-            lambda: cls.fetch_via_tier4_ytdlp(raw_url, tweet_id),
-        ]
-
-        for tier_func in tiers:
-            result = tier_func()
-            if result and result.get("media") and len(result["media"]) > 0:
-                result["success"] = True
-                result["tweet_id"] = tweet_id
-                return result
-
-        return {
-            "success": False,
-            "error": "Could not extract media. The post might contain only text, is private, or has been deleted."
-        }
-
-
-# --- Video Stream Proxy Engine (Bypasses Twitter CORS) ---
-def fetch_video_binary(url: str) -> Optional[bytes]:
-    """Streams video bytes through Python to avoid browser CORS blocks."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Referer": "https://twitter.com/",
-    }
-    try:
-        r = requests.get(url, headers=headers, stream=True, timeout=25)
-        if r.status_code == 200:
-            return r.content
-    except Exception:
-        pass
-    return None
-
-
-# --- Client-Side High-Speed Image Downloader ---
-def render_instant_image_download_button(url: str, filename: str, label: str) -> str:
-    """Zero-server-bandwidth client-side image downloader."""
-    safe_url = html.escape(url)
-    safe_filename = html.escape(filename)
-    safe_label = html.escape(label)
-    btn_id = "btn_" + re.sub(r"\W+", "_", filename)
-
-    return f"""
-    <div class="dl-btn-container">
-        <button id="{btn_id}" class="instant-dl-btn" onclick="downloadImageDirect('{safe_url}', '{safe_filename}', '{btn_id}', '{safe_label}')">
-            ⬇️ {safe_label}
-        </button>
-    </div>
-    <script>
-    function downloadImageDirect(url, filename, btnId, origLabel) {{
-        const btn = document.getElementById(btnId);
-        btn.innerText = "⏳ Saving...";
-        btn.disabled = true;
-
-        fetch(url, {{ mode: 'cors' }})
-            .then(res => {{
-                if (!res.ok) throw new Error('Network response was not ok');
-                return res.blob();
-            }})
-            .then(blob => {{
-                const blobUrl = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.style.display = 'none';
-                a.href = blobUrl;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(blobUrl);
-                document.body.removeChild(a);
-
-                btn.innerText = "✅ Saved!";
-                btn.style.backgroundColor = "#00BA7C";
-                setTimeout(() => {{
-                    btn.innerText = "⬇️ " + origLabel;
-                    btn.style.backgroundColor = "#1DA1F2";
-                    btn.disabled = false;
-                }}, 2500);
-            }})
-            .catch(() => {{
-                // Direct fallback
-                const a = document.createElement('a');
-                a.href = url;
-                a.target = '_blank';
-                a.download = filename;
-                a.click();
-                btn.innerText = "⬇️ " + origLabel;
-                btn.disabled = false;
-            }});
-    }}
-    </script>
-    """
-
-
-# --- Presentation Layer ---
-st.markdown('<div class="main-title">X / Twitter Media Downloader 🐦</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">High-speed media extractor with zero-waste data streaming.</div>', unsafe_allow_html=True)
-
-# 1. Row 1: Link Section
-tweet_url = st.text_input(
-    "Twitter / X Post URL",
-    placeholder="https://x.com/username/status/123456789...",
-    label_visibility="collapsed"
-)
-
-# 2. Row 2: Show Media Previews Checkbox
-show_previews = st.checkbox("Show Media Previews", value=True)
-
-# 3. Row 3: Extract Media Button
-fetch_btn = st.button("Extract Media", use_container_width=True)
-
-if fetch_btn:
-    if not tweet_url.strip():
-        st.warning("Please provide a valid tweet URL.")
+# --- Download Logic ---
+if fetch_clicked:
+    if not tweet_url:
+        st.warning("⚠️ Please enter a valid URL.")
     else:
-        with st.spinner("Resolving media links..."):
-            engine_result = TwitterMediaEngine.resolve_all(tweet_url.strip())
-            st.session_state["result"] = engine_result
-            # Clear previous video cache when extracting a new tweet
-            st.session_state.pop("video_cache", None)
+        with tempfile.TemporaryDirectory(prefix="twitter_dl_") as temp_dir:
+            
+            with st.spinner("Analyzing link and extracting all available media..."):
+                try:
+                    # 1. Fetch videos/GIFs using yt-dlp
+                    # We prefix the output with 'ytdlp_vid_' so we can identify videos downloaded by yt-dlp
+                    subprocess.run([
+                        "yt-dlp",
+                        "-f", "bestvideo+bestaudio/best",
+                        "--merge-output-format", "mp4",
+                        "-o", os.path.join(temp_dir, "ytdlp_vid_%(id)s_%(autonumber)s.%(ext)s"),
+                        tweet_url
+                    ], capture_output=True)
 
-# --- Render Results ---
-if "result" in st.session_state:
-    res = st.session_state["result"]
+                    # 2. Fetch images using gallery-dl
+                    subprocess.run([
+                        "gallery-dl", 
+                        "--directory", temp_dir, 
+                        tweet_url
+                    ], capture_output=True)
 
-    if not res.get("success"):
-        st.error(f"❌ {res.get('error', 'Unknown error occurred.')}")
-    else:
-        media_count = len(res["media"])
-        st.success(f"Found {media_count} media item(s) via **{res['tier']}**!")
+                    # 3. Collect ALL downloaded files recursively
+                    all_files = glob.glob(os.path.join(temp_dir, "**", "*"), recursive=True)
+                    file_paths = [f for f in all_files if os.path.isfile(f)]
 
-        # Tweet Card Display
-        avatar_html = f'<img src="{res["author_avatar"]}" class="tweet-avatar">' if res.get("author_avatar") else ""
-        st.markdown(
-            f"""
-            <div class="tweet-card">
-                <div class="tweet-author">
-                    {avatar_html}
-                    <div>
-                        <div style="font-weight: 700; color: inherit;">{res['author_name']}</div>
-                        <div style="color: #71767B; font-size: 0.9rem;">@{res['author_screen']}</div>
-                    </div>
-                </div>
-                <div class="tweet-text">{res['text']}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+                    valid_video_exts = [".mp4", ".webm", ".mkv"]
+                    valid_image_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+                    
+                    extracted_media = []
+                    seen_hashes = set()
 
-        # Media Items Grid
-        grid_cols = st.columns(2) if media_count > 1 else [st.container()]
+                    for fp in file_paths:
+                        basename = os.path.basename(fp)
+                        basename_lower = basename.lower()
+                        
+                        is_video = any(basename_lower.endswith(ext) for ext in valid_video_exts)
+                        is_image = any(basename_lower.endswith(ext) for ext in valid_image_exts)
 
-        for idx, item in enumerate(res["media"]):
-            target_col = grid_cols[idx % 2] if media_count > 1 else grid_cols[0]
-            with target_col:
-                st.markdown('<div class="media-card">', unsafe_allow_html=True)
+                        # Skip temporary or unwanted files entirely
+                        if not (is_video or is_image):
+                            continue
+                            
+                        # DEDUPLICATION FIX: gallery-dl sometimes downloads identical videos alongside yt-dlp.
+                        # We force the app to ignore ANY video that was not downloaded by yt-dlp.
+                        if is_video and not basename.startswith("ytdlp_vid_"):
+                            continue
+                            
+                        # Read file data into memory
+                        with open(fp, "rb") as f:
+                            data = f.read()
+                        
+                        # Deduplicate images (If gallery-dl downloads multiple sizes/thumbnails of the exact same image)
+                        file_hash = hashlib.md5(data).hexdigest()
+                        if file_hash in seen_hashes:
+                            continue
+                        seen_hashes.add(file_hash)
+
+                        # Determine Mime Type
+                        mime_type, _ = mimetypes.guess_type(fp)
+                        if not mime_type:
+                            mime_type = "application/octet-stream"
+
+                        # Set type for UI preview handling
+                        media_type = "video" if is_video else "image"
+
+                        extracted_media.append({
+                            "name": basename,
+                            "data": data,
+                            "mime": mime_type,
+                            "type": media_type
+                        })
+
+                    if extracted_media:
+                        st.session_state.media_items = extracted_media
+                        st.session_state.last_url = tweet_url
+                        st.session_state.status_message = "success"
+                    else:
+                        st.session_state.status_message = "error_no_media"
                 
-                # Previews (Only streamed when checkbox is ON)
-                if show_previews:
-                    if item["type"] == "video":
-                        st.video(item["url"])
-                    else:
-                        st.image(item["url"], use_container_width=True)
+                except Exception as e:
+                    st.session_state.status_message = "error_general"
+                    st.session_state.error_details = str(e)
 
-                # --- High-Speed Downloads ---
-                btn_label = f"Download {item['type'].upper()} ({idx+1}/{media_count})"
+st.markdown("---")
 
-                if item["type"] == "image":
-                    # Instant client-side direct download (Zero server bandwidth)
-                    img_html = render_instant_image_download_button(item["url"], item["filename"], btn_label)
-                    st.components.v1.html(img_html, height=50)
-
+# --- Display Results ---
+if st.session_state.status_message == "success":
+    st.success(f"✅ **Successfully extracted {len(st.session_state.media_items)} media item(s)!**")
+    st.write("")
+    
+    # Create a clean 2-column grid for the media items
+    cols = st.columns(2)
+    
+    for idx, item in enumerate(st.session_state.media_items):
+        with cols[idx % 2]: # Distribute evenly between left and right columns
+            st.markdown('<div class="media-card">', unsafe_allow_html=True)
+            
+            # 1. Preview
+            if show_preview:
+                if item["type"] == "video":
+                    st.video(item["data"])
                 else:
-                    # Video: Bypasses Twitter CORS by downloading directly as a true .mp4 file
-                    video_cache = st.session_state.setdefault("video_cache", {})
-                    cache_key = item["url"]
+                    st.image(item["data"], use_column_width=True)
+            else:
+                # Fallback if preview is toggled off
+                icon = "🎥" if item["type"] == "video" else "📸"
+                st.markdown(f"<div style='text-align: center; padding: 20px;'><h3>{icon} {item['type'].title()} File</h3></div>", unsafe_allow_html=True)
+            
+            # 2. Individual Download Button
+            st.download_button(
+                label=f"Download {item['type'].title()}",
+                data=item["data"],
+                file_name=item["name"],
+                mime=item["mime"],
+                key=f"dl_{idx}_{st.session_state.last_url}"
+            )
+            
+            st.markdown('</div>', unsafe_allow_html=True)
 
-                    if cache_key in video_cache:
-                        # Video file ready in memory: Save to disk
-                        st.download_button(
-                            label=f"💾 Save {item['filename']} to Device",
-                            data=video_cache[cache_key],
-                            file_name=item["filename"],
-                            mime="video/mp4",
-                            key=f"dl_ready_{res['tweet_id']}_{idx}",
-                            use_container_width=True
-                        )
-                    else:
-                        # Fetches only this video on-demand (Does not touch images or other videos)
-                        if st.button(f"⬇️ {btn_label}", key=f"fetch_vid_{res['tweet_id']}_{idx}", use_container_width=True):
-                            with st.spinner("Downloading video file from X CDN..."):
-                                vid_bytes = fetch_video_binary(item["url"])
-                                if vid_bytes:
-                                    video_cache[cache_key] = vid_bytes
-                                    st.rerun()
-                                else:
-                                    st.error("Could not download video. Stream may be restricted.")
+elif st.session_state.status_message == "error_no_media":
+    st.error("🚫 **Failed to fetch media.** The link might be text-only, from a private account, or the server is temporarily rate-limited by X.")
+elif st.session_state.status_message == "error_general":
+    st.error(f"⚠️ **An unexpected error occurred:** {st.session_state.error_details}")
 
-                st.markdown('</div>', unsafe_allow_html=True)
+# --- Footer Disclaimer ---
+st.markdown("<br><br>", unsafe_allow_html=True)
 
-        st.markdown("<hr style='margin-top: 2rem; margin-bottom: 1.5rem; opacity: 0.2;'>", unsafe_allow_html=True)
+# Centered Clear Cache Button
+cc_col1, cc_col2, cc_col3 = st.columns([1, 1, 1])
+with cc_col2:
+    if st.button("Clear Cache", use_container_width=True):
+        st.session_state.media_items = []
+        st.session_state.last_url = None
+        st.session_state.status_message = None
+        st.session_state.error_details = None
+        st.rerun()
 
-        # Clear Cache Button: ONLY displayed at the very bottom when media is loaded
-        if st.button("🗑️ Clear Cache & Reset", use_container_width=True):
-            st.cache_data.clear()
-            st.session_state.clear()
-            st.rerun()
+st.caption("ℹ️ **Note:** X/Twitter limits automated access. If you experience errors, it usually means the server's IP has been temporarily restricted.")
+st.markdown('<div style="text-align: center;"><a href="https://github.com/JustToTryModels/Twitter-Downloader/blob/main/app.py" target="_blank" style="color: #536471; text-decoration: none; font-size: 14px;">View Source Code on GitHub 💻</a></div>', unsafe_allow_html=True)
