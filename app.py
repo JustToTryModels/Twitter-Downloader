@@ -1,5 +1,6 @@
 import io
 import re
+import urllib.parse
 import zipfile
 from typing import Any, Dict, List, Optional
 import requests
@@ -21,14 +22,14 @@ st.markdown(
     .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
-        max-width: 850px;
+        max-width: 800px;
     }
     #MainMenu, footer, header {visibility: hidden;}
 
     .main-title {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         font-weight: 900;
-        font-size: 2.6rem;
+        font-size: 2.5rem;
         text-align: center;
         letter-spacing: -0.5px;
         margin-bottom: 0.2rem;
@@ -37,13 +38,13 @@ st.markdown(
         text-align: center;
         color: #71767B;
         font-size: 1.05rem;
-        margin-bottom: 2rem;
+        margin-bottom: 1.8rem;
     }
-
+    
     /* Input Box */
     .stTextInput > div > div > input {
         border-radius: 14px !important;
-        padding: 16px 20px !important;
+        padding: 14px 18px !important;
         font-size: 16px !important;
         background-color: #F7F9F9 !important;
         border: 2px solid #E1E8ED !important;
@@ -54,7 +55,7 @@ st.markdown(
         background-color: #ffffff !important;
         box-shadow: 0 0 0 3px rgba(29, 161, 242, 0.15) !important;
     }
-
+    
     /* Tweet Card */
     .tweet-card {
         background: #ffffff;
@@ -80,11 +81,21 @@ st.markdown(
         font-size: 1.05rem;
         line-height: 1.5;
         color: #0F1419;
-        margin-bottom: 15px;
+        margin-bottom: 10px;
         white-space: pre-wrap;
         word-break: break-word;
     }
-
+    
+    /* Media Cards */
+    .media-card {
+        background: #ffffff;
+        border: 1px solid #EFF3F4;
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+    
     /* Buttons */
     div.stButton > button {
         border-radius: 9999px !important;
@@ -104,17 +115,23 @@ st.markdown(
         background-color: #1DA1F2 !important;
         color: white !important;
         border: none !important;
+        width: 100% !important;
     }
     div.stDownloadButton > button:hover {
         background-color: #1A8CD8 !important;
     }
 
+    /* Dark Mode Support */
     @media (prefers-color-scheme: dark) {
         .tweet-card {
             background: #16181C;
             border-color: #2F3336;
         }
         .tweet-text { color: #E7E9EA; }
+        .media-card {
+            background: #16181C;
+            border-color: #2F3336;
+        }
         .stTextInput > div > div > input {
             background-color: #202327 !important;
             border-color: #2F3336 !important;
@@ -146,10 +163,21 @@ class TwitterMediaEngine:
     def get_highest_resolution_image_url(cls, url: str) -> str:
         """Forces Twitter image URLs to point to their uncompressed original upload."""
         if "twimg.com" in url:
+            parsed = urllib.parse.urlparse(url)
+            qs = urllib.parse.parse_qs(parsed.query)
             base_url = url.split("?")[0]
-            ext_match = re.search(r"\.(jpg|jpeg|png|webp)$", base_url, re.IGNORECASE)
-            ext = ext_match.group(1) if ext_match else "jpg"
-            return f"{base_url}?format={ext}&name=orig"
+            
+            # Determine format
+            ext = "jpg"
+            if "format" in qs and qs["format"]:
+                ext = qs["format"][0]
+            else:
+                ext_match = re.search(r"\.(jpg|jpeg|png|webp)$", base_url, re.IGNORECASE)
+                if ext_match:
+                    ext = ext_match.group(1)
+            
+            base_clean = re.sub(r"\.(jpg|jpeg|png|webp)$", "", base_url, flags=re.IGNORECASE)
+            return f"{base_clean}?format={ext}&name=orig"
         return url
 
     @classmethod
@@ -167,23 +195,22 @@ class TwitterMediaEngine:
                 return None
 
             media_list = []
-            # Extract photos
             if "media" in tweet and "photos" in tweet["media"]:
                 for p in tweet["media"]["photos"]:
-                    orig_url = cls.get_highest_resolution_image_url(p["url"])
+                    orig_url = cls.get_highest_resolution_image_url(p.get("url", ""))
+                    ext = "png" if "format=png" in orig_url.lower() or ".png" in orig_url.lower() else "jpg"
                     media_list.append({
                         "type": "image",
                         "url": orig_url,
                         "thumbnail": orig_url,
-                        "filename": f"tweet_{tweet_id}_{len(media_list)+1}.jpg"
+                        "filename": f"tweet_{tweet_id}_{len(media_list)+1}.{ext}"
                     })
 
-            # Extract videos & gifs
             if "media" in tweet and "videos" in tweet["media"]:
                 for v in tweet["media"]["videos"]:
                     media_list.append({
                         "type": "video",
-                        "url": v["url"],
+                        "url": v.get("url"),
                         "thumbnail": v.get("thumbnail_url"),
                         "filename": f"tweet_{tweet_id}_{len(media_list)+1}.mp4"
                     })
@@ -203,7 +230,7 @@ class TwitterMediaEngine:
     def fetch_via_tier2_syndication(cls, tweet_id: str) -> Optional[Dict[str, Any]]:
         """Tier 2: Query Twitter's official embedded widget CDN."""
         try:
-            token = (int(tweet_id) / 1e15) * 3.141592653589793  # Syndication token emulator
+            token = (int(tweet_id) / 1e15) * 3.141592653589793
             endpoint = f"https://cdn.syndication.twimg.com/tweet-result?id={tweet_id}&token={token}"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -215,17 +242,16 @@ class TwitterMediaEngine:
             data = resp.json()
 
             media_list = []
-            # Images
             for p in data.get("photos", []):
                 orig_url = cls.get_highest_resolution_image_url(p.get("url", ""))
+                ext = "png" if "format=png" in orig_url.lower() or ".png" in orig_url.lower() else "jpg"
                 media_list.append({
                     "type": "image",
                     "url": orig_url,
                     "thumbnail": orig_url,
-                    "filename": f"tweet_{tweet_id}_{len(media_list)+1}.jpg"
+                    "filename": f"tweet_{tweet_id}_{len(media_list)+1}.{ext}"
                 })
 
-            # Video
             if "video" in data:
                 variants = data["video"].get("variants", [])
                 mp4_variants = [v for v in variants if v.get("type") == "video/mp4" or "video/mp4" in v.get("src", "")]
@@ -254,7 +280,7 @@ class TwitterMediaEngine:
         """Tier 3: Query VxTwitter API."""
         try:
             endpoint = f"https://api.vxtwitter.com/Twitter/status/{tweet_id}"
-            headers = {"User-Agent": "Mozilla/5.0"}
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
             resp = requests.get(endpoint, headers=headers, timeout=8)
             if resp.status_code != 200:
                 return None
@@ -266,7 +292,9 @@ class TwitterMediaEngine:
                 url = item.get("url")
                 if m_type == "image":
                     url = cls.get_highest_resolution_image_url(url)
-                ext = "mp4" if m_type == "video" else "jpg"
+                    ext = "png" if "format=png" in url.lower() or ".png" in url.lower() else "jpg"
+                else:
+                    ext = "mp4"
 
                 media_list.append({
                     "type": m_type,
@@ -288,7 +316,7 @@ class TwitterMediaEngine:
 
     @classmethod
     def fetch_via_tier4_ytdlp(cls, url: str, tweet_id: str) -> Optional[Dict[str, Any]]:
-        """Tier 4: In-memory yt-dlp using public syndication flags."""
+        """Tier 4: In-memory yt-dlp resolver."""
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
@@ -326,12 +354,11 @@ class TwitterMediaEngine:
 
     @classmethod
     def resolve_all(cls, raw_url: str) -> Dict[str, Any]:
-        """Tries all tiers in sequence until one resolves media."""
+        """Tries all tiers sequentially until media is resolved."""
         tweet_id = cls.extract_status_id(raw_url)
         if not tweet_id:
             return {"success": False, "error": "Invalid Twitter/X URL. Make sure it contains `/status/<ID>`."}
 
-        # Sequential Tier execution
         tiers = [
             lambda: cls.fetch_via_tier1_fxtwitter(tweet_id),
             lambda: cls.fetch_via_tier2_syndication(tweet_id),
@@ -348,18 +375,25 @@ class TwitterMediaEngine:
 
         return {
             "success": False,
-            "error": "Could not extract media. The tweet might contain only text, or the post was deleted."
+            "error": "Could not extract media. The post might contain only text, is private, or has been deleted."
         }
 
 
 # --- Asset Streaming Utilities ---
-@st.cache_data(show_spinner=False, ttl=1800)
-def download_binary_stream(url: str) -> bytes:
-    """Streams binary media straight into memory."""
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers, stream=True, timeout=15)
-    r.raise_for_status()
-    return r.content
+@st.cache_data(show_spinner=False, ttl=3600)
+def download_binary_stream(url: str) -> Optional[bytes]:
+    """Streams binary media straight into memory with browser headers."""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Referer": "https://twitter.com/",
+        }
+        r = requests.get(url, headers=headers, stream=True, timeout=20)
+        r.raise_for_status()
+        return r.content
+    except Exception:
+        return None
 
 
 def create_batch_zip(media_items: List[Dict[str, Any]]) -> bytes:
@@ -368,7 +402,8 @@ def create_batch_zip(media_items: List[Dict[str, Any]]) -> bytes:
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for item in media_items:
             content = download_binary_stream(item["url"])
-            zip_file.writestr(item["filename"], content)
+            if content:
+                zip_file.writestr(item["filename"], content)
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
 
@@ -377,17 +412,17 @@ def create_batch_zip(media_items: List[Dict[str, Any]]) -> bytes:
 st.markdown('<div class="main-title">X / Twitter Media Downloader 🐦</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-title">High-res uncompressed media extractor with 4-tier zero-cookie failover.</div>', unsafe_allow_html=True)
 
-# Row 1: URL Input
+# 1. Row 1: Link Section
 tweet_url = st.text_input(
-    "URL Input",
+    "Twitter / X Post URL",
     placeholder="https://x.com/username/status/123456789...",
     label_visibility="collapsed"
 )
 
-# Row 2: Show Media Previews checkbox
+# 2. Row 2: Show Media Previews
 show_previews = st.checkbox("Show Media Previews", value=True)
 
-# Row 3: Extract Media button
+# 3. Row 3: Extract Media Button
 fetch_btn = st.button("Extract Media", use_container_width=True)
 
 if fetch_btn:
@@ -402,8 +437,8 @@ if fetch_btn:
 if "result" in st.session_state:
     res = st.session_state["result"]
 
-    if not res["success"]:
-        st.error(f"❌ {res['error']}")
+    if not res.get("success"):
+        st.error(f"❌ {res.get('error', 'Unknown error occurred.')}")
     else:
         media_count = len(res["media"])
         st.success(f"Successfully extracted {media_count} media item(s) via **{res['tier']}**!")
@@ -428,44 +463,58 @@ if "result" in st.session_state:
 
         # Batch Download ZIP (if multiple media)
         if media_count > 1:
-            with st.spinner("Bundling all assets into ZIP..."):
+            with st.spinner("Preparing ZIP package..."):
                 zip_data = create_batch_zip(res["media"])
-            st.download_button(
-                label=f"📦 Download All Media ({media_count} items) as .ZIP",
-                data=zip_data,
-                file_name=f"twitter_{res['tweet_id']}_bundle.zip",
-                mime="application/zip",
-                use_container_width=True,
-            )
+                st.download_button(
+                    label=f"📦 Download All Media ({media_count} items) as .ZIP",
+                    data=zip_data,
+                    file_name=f"twitter_{res['tweet_id']}_all.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                    key=f"zip_dl_{res['tweet_id']}"
+                )
             st.write("")
 
         # Media Grid
-        if media_count > 1:
-            grid_cols = st.columns(2)
-        else:
-            grid_cols = [st.container()]
+        grid_cols = st.columns(2) if media_count > 1 else [st.container()]
 
         for idx, item in enumerate(res["media"]):
             target_col = grid_cols[idx % 2] if media_count > 1 else grid_cols[0]
             with target_col:
+                st.markdown('<div class="media-card">', unsafe_allow_html=True)
+                
                 # Fetch raw content
-                try:
-                    binary_data = download_binary_stream(item["url"])
-                    mime_type = "video/mp4" if item["type"] == "video" else "image/jpeg"
+                binary_data = download_binary_stream(item["url"])
+                
+                if binary_data:
+                    # Determine proper MIME type
+                    if item["type"] == "video":
+                        mime_type = "video/mp4"
+                    elif item["filename"].endswith(".png"):
+                        mime_type = "image/png"
+                    elif item["filename"].endswith(".webp"):
+                        mime_type = "image/webp"
+                    else:
+                        mime_type = "image/jpeg"
 
+                    # Previews
                     if show_previews:
                         if item["type"] == "video":
                             st.video(binary_data)
                         else:
                             st.image(binary_data, use_container_width=True)
 
+                    # Download button
                     st.download_button(
                         label=f"⬇️ Download {item['type'].upper()} ({idx+1}/{media_count})",
                         data=binary_data,
                         file_name=item["filename"],
                         mime=mime_type,
-                        key=f"dl_{res['tweet_id']}_{idx}",
-                        use_container_width=True,
+                        key=f"dl_btn_{res['tweet_id']}_{idx}",
+                        use_container_width=True
                     )
-                except Exception as dl_err:
-                    st.error(f"Failed to stream asset: {dl_err}")
+                else:
+                    st.error("Failed to load binary data. You can download directly below:")
+                    st.markdown(f"[🔗 Direct Media Link]({item['url']})")
+
+                st.markdown('</div>', unsafe_allow_html=True)
