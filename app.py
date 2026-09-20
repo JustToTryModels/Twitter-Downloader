@@ -1,8 +1,6 @@
-from concurrent.futures import ThreadPoolExecutor
 import io
 import re
 import urllib.parse
-import zipfile
 from typing import Any, Dict, List, Optional
 import requests
 import streamlit as st
@@ -23,14 +21,14 @@ st.markdown(
     .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
-        max-width: 800px;
+        max-width: 780px;
     }
     #MainMenu, footer, header {visibility: hidden;}
 
     .main-title {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         font-weight: 900;
-        font-size: 2.5rem;
+        font-size: 2.4rem;
         text-align: center;
         letter-spacing: -0.5px;
         margin-bottom: 0.2rem;
@@ -38,13 +36,13 @@ st.markdown(
     .sub-title {
         text-align: center;
         color: #71767B;
-        font-size: 1.05rem;
-        margin-bottom: 1.8rem;
+        font-size: 1rem;
+        margin-bottom: 1.6rem;
     }
     
     /* Input Box */
     .stTextInput > div > div > input {
-        border-radius: 14px !important;
+        border-radius: 12px !important;
         padding: 14px 18px !important;
         font-size: 16px !important;
         background-color: #F7F9F9 !important;
@@ -62,15 +60,15 @@ st.markdown(
         background: #ffffff;
         border: 1px solid #E1E8ED;
         border-radius: 16px;
-        padding: 20px;
-        margin: 20px 0;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+        padding: 18px 20px;
+        margin: 18px 0;
+        box-shadow: 0 3px 10px rgba(0,0,0,0.03);
     }
     .tweet-author {
         display: flex;
         align-items: center;
         gap: 12px;
-        margin-bottom: 12px;
+        margin-bottom: 10px;
     }
     .tweet-avatar {
         width: 44px;
@@ -79,10 +77,9 @@ st.markdown(
         background-color: #E1E8ED;
     }
     .tweet-text {
-        font-size: 1.05rem;
-        line-height: 1.5;
+        font-size: 1.02rem;
+        line-height: 1.45;
         color: #0F1419;
-        margin-bottom: 10px;
         white-space: pre-wrap;
         word-break: break-word;
     }
@@ -120,6 +117,19 @@ st.markdown(
     }
     div.stDownloadButton > button:hover {
         background-color: #1A8CD8 !important;
+    }
+
+    /* Fallback Direct Link Button */
+    .direct-dl-btn {
+        display: block;
+        text-align: center;
+        background-color: #1DA1F2;
+        color: white !important;
+        font-weight: 700;
+        padding: 10px 16px;
+        border-radius: 9999px;
+        text-decoration: none !important;
+        margin-top: 8px;
     }
 
     /* Dark Mode */
@@ -162,27 +172,18 @@ class TwitterMediaEngine:
 
     @classmethod
     def get_highest_resolution_image_url(cls, url: str) -> str:
-        """Forces Twitter image URLs to point to their uncompressed original upload."""
+        """Forces Twitter image URLs to point to their uncompressed original upload safely."""
         if "twimg.com" in url:
-            parsed = urllib.parse.urlparse(url)
-            qs = urllib.parse.parse_qs(parsed.query)
-            base_url = url.split("?")[0]
-            
-            ext = "jpg"
-            if "format" in qs and qs["format"]:
-                ext = qs["format"][0]
-            else:
-                ext_match = re.search(r"\.(jpg|jpeg|png|webp)$", base_url, re.IGNORECASE)
-                if ext_match:
-                    ext = ext_match.group(1)
-            
-            base_clean = re.sub(r"\.(jpg|jpeg|png|webp)$", "", base_url, flags=re.IGNORECASE)
-            return f"{base_clean}?format={ext}&name=orig"
+            if "name=" in url:
+                return re.sub(r"name=[a-zA-Z0-9_]+", "name=orig", url)
+            if "?" in url:
+                return f"{url}&name=orig"
+            return f"{url}?name=orig"
         return url
 
     @classmethod
     def fetch_via_tier1_fxtwitter(cls, tweet_id: str) -> Optional[Dict[str, Any]]:
-        """Tier 1: Query FxTwitter/FixTweet API."""
+        """Tier 1: Query FxTwitter API."""
         try:
             endpoint = f"https://api.fxtwitter.com/status/{tweet_id}"
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -198,11 +199,10 @@ class TwitterMediaEngine:
             if "media" in tweet and "photos" in tweet["media"]:
                 for p in tweet["media"]["photos"]:
                     orig_url = cls.get_highest_resolution_image_url(p.get("url", ""))
-                    ext = "png" if "format=png" in orig_url.lower() or ".png" in orig_url.lower() else "jpg"
+                    ext = "png" if ".png" in orig_url.lower() or "format=png" in orig_url.lower() else "jpg"
                     media_list.append({
                         "type": "image",
                         "url": orig_url,
-                        "thumbnail": orig_url,
                         "filename": f"tweet_{tweet_id}_{len(media_list)+1}.{ext}"
                     })
 
@@ -211,7 +211,6 @@ class TwitterMediaEngine:
                     media_list.append({
                         "type": "video",
                         "url": v.get("url"),
-                        "thumbnail": v.get("thumbnail_url"),
                         "filename": f"tweet_{tweet_id}_{len(media_list)+1}.mp4"
                     })
 
@@ -244,11 +243,10 @@ class TwitterMediaEngine:
             media_list = []
             for p in data.get("photos", []):
                 orig_url = cls.get_highest_resolution_image_url(p.get("url", ""))
-                ext = "png" if "format=png" in orig_url.lower() or ".png" in orig_url.lower() else "jpg"
+                ext = "png" if ".png" in orig_url.lower() or "format=png" in orig_url.lower() else "jpg"
                 media_list.append({
                     "type": "image",
                     "url": orig_url,
-                    "thumbnail": orig_url,
                     "filename": f"tweet_{tweet_id}_{len(media_list)+1}.{ext}"
                 })
 
@@ -260,7 +258,6 @@ class TwitterMediaEngine:
                     media_list.append({
                         "type": "video",
                         "url": best_variant.get("src"),
-                        "thumbnail": data["video"].get("poster"),
                         "filename": f"tweet_{tweet_id}_{len(media_list)+1}.mp4"
                     })
 
@@ -280,7 +277,7 @@ class TwitterMediaEngine:
         """Tier 3: Query VxTwitter API."""
         try:
             endpoint = f"https://api.vxtwitter.com/Twitter/status/{tweet_id}"
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            headers = {"User-Agent": "Mozilla/5.0"}
             resp = requests.get(endpoint, headers=headers, timeout=6)
             if resp.status_code != 200:
                 return None
@@ -292,14 +289,13 @@ class TwitterMediaEngine:
                 url = item.get("url")
                 if m_type == "image":
                     url = cls.get_highest_resolution_image_url(url)
-                    ext = "png" if "format=png" in url.lower() or ".png" in url.lower() else "jpg"
+                    ext = "png" if ".png" in url.lower() else "jpg"
                 else:
                     ext = "mp4"
 
                 media_list.append({
                     "type": m_type,
                     "url": url,
-                    "thumbnail": item.get("thumbnail_url", url),
                     "filename": f"tweet_{tweet_id}_{len(media_list)+1}.{ext}"
                 })
 
@@ -337,7 +333,6 @@ class TwitterMediaEngine:
                     media_list.append({
                         "type": "video",
                         "url": best["url"],
-                        "thumbnail": info.get("thumbnail"),
                         "filename": f"tweet_{tweet_id}_1.mp4"
                     })
 
@@ -379,47 +374,32 @@ class TwitterMediaEngine:
         }
 
 
-# --- High-Speed Parallel Asset Pre-fetcher ---
-def prefetch_media_in_parallel(media_items: List[Dict[str, Any]]) -> Dict[str, bytes]:
-    """Downloads all media assets concurrently using thread workers for 0ms download response."""
-    session = requests.Session()
-    session.headers.update({
+# --- On-Demand Streamer (Cached to minimize data usage) ---
+@st.cache_data(show_spinner=False, max_entries=20, ttl=1800)
+def fetch_media_bytes(url: str) -> Optional[bytes]:
+    """Fetches media content on demand with browser headers and fallback."""
+    headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Referer": "https://twitter.com/",
-    })
-
-    def fetch_item(item):
-        try:
-            r = session.get(item["url"], timeout=15)
-            if r.status_code == 200:
-                return item["url"], r.content
-        except Exception:
-            pass
-        return item["url"], b""
-
-    results = {}
-    with ThreadPoolExecutor(max_workers=min(len(media_items), 8)) as executor:
-        for url, data in executor.map(fetch_item, media_items):
-            if data:
-                results[url] = data
-    return results
-
-
-def build_zip_package(media_items: List[Dict[str, Any]], binaries: Dict[str, bytes]) -> bytes:
-    """Pre-packs media items into an in-memory ZIP package instantly."""
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for item in media_items:
-            content = binaries.get(item["url"])
-            if content:
-                zip_file.writestr(item["filename"], content)
-    zip_buffer.seek(0)
-    return zip_buffer.getvalue()
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=12)
+        if r.status_code == 200:
+            return r.content
+        # Fallback if orig param caused 404
+        if "name=orig" in url:
+            clean_url = url.replace("&name=orig", "").replace("?name=orig", "")
+            r2 = requests.get(clean_url, headers=headers, timeout=12)
+            if r2.status_code == 200:
+                return r2.content
+    except Exception:
+        pass
+    return None
 
 
 # --- Presentation Layer ---
 st.markdown('<div class="main-title">X / Twitter Media Downloader 🐦</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">High-res uncompressed media extractor with 4-tier failover.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">High-res media extractor with zero-waste data streaming.</div>', unsafe_allow_html=True)
 
 # 1. Row 1: Link Section
 tweet_url = st.text_input(
@@ -428,7 +408,7 @@ tweet_url = st.text_input(
     label_visibility="collapsed"
 )
 
-# 2. Row 2: Show Media Previews
+# 2. Row 2: Show Media Previews Checkbox
 show_previews = st.checkbox("Show Media Previews", value=True)
 
 # 3. Row 3: Extract Media Button
@@ -438,18 +418,11 @@ if fetch_btn:
     if not tweet_url.strip():
         st.warning("Please provide a valid tweet URL.")
     else:
-        with st.spinner("Resolving media links and buffering assets..."):
+        with st.spinner("Extracting media links..."):
             engine_result = TwitterMediaEngine.resolve_all(tweet_url.strip())
             st.session_state["result"] = engine_result
 
-            # Pre-fetch all binary assets in parallel for ultra-responsive instant downloads
-            if engine_result.get("success"):
-                binaries = prefetch_media_in_parallel(engine_result["media"])
-                st.session_state["binaries"] = binaries
-                if len(engine_result["media"]) > 1:
-                    st.session_state["zip_data"] = build_zip_package(engine_result["media"], binaries)
-
-# --- Render Results (When Media is Loaded) ---
+# --- Render Results ---
 if "result" in st.session_state:
     res = st.session_state["result"]
 
@@ -457,9 +430,7 @@ if "result" in st.session_state:
         st.error(f"❌ {res.get('error', 'Unknown error occurred.')}")
     else:
         media_count = len(res["media"])
-        binaries = st.session_state.get("binaries", {})
-
-        st.success(f"Successfully extracted {media_count} media item(s) via **{res['tier']}**!")
+        st.success(f"Found {media_count} media item(s) via **{res['tier']}**!")
 
         # Tweet Card Display
         avatar_html = f'<img src="{res["author_avatar"]}" class="tweet-avatar">' if res.get("author_avatar") else ""
@@ -479,19 +450,7 @@ if "result" in st.session_state:
             unsafe_allow_html=True,
         )
 
-        # Batch Download ZIP (if multiple media)
-        if media_count > 1 and "zip_data" in st.session_state:
-            st.download_button(
-                label=f"📦 Download All Media ({media_count} items) as .ZIP",
-                data=st.session_state["zip_data"],
-                file_name=f"twitter_{res['tweet_id']}_all.zip",
-                mime="application/zip",
-                use_container_width=True,
-                key=f"zip_dl_{res['tweet_id']}"
-            )
-            st.write("")
-
-        # Media Grid
+        # Media Items Grid
         grid_cols = st.columns(2) if media_count > 1 else [st.container()]
 
         for idx, item in enumerate(res["media"]):
@@ -499,38 +458,39 @@ if "result" in st.session_state:
             with target_col:
                 st.markdown('<div class="media-card">', unsafe_allow_html=True)
                 
-                # Fetch cached bytes from RAM
-                binary_data = binaries.get(item["url"])
+                # Direct Browser Previews (Zero server data consumed!)
+                if show_previews:
+                    if item["type"] == "video":
+                        st.video(item["url"])
+                    else:
+                        st.image(item["url"], use_container_width=True)
 
                 # Determine MIME type
                 if item["type"] == "video":
                     mime_type = "video/mp4"
                 elif item["filename"].endswith(".png"):
                     mime_type = "image/png"
-                elif item["filename"].endswith(".webp"):
-                    mime_type = "image/webp"
                 else:
                     mime_type = "image/jpeg"
 
-                # Previews (Direct browser loading for maximum speed)
-                if show_previews:
-                    if item["type"] == "video":
-                        st.video(binary_data if binary_data else item["url"])
-                    else:
-                        st.image(binary_data if binary_data else item["url"], use_container_width=True)
-
-                # Download button (Immediate memory serving)
-                if binary_data:
+                # Download Action (Cached and lightweight)
+                media_bytes = fetch_media_bytes(item["url"])
+                
+                if media_bytes:
                     st.download_button(
                         label=f"⬇️ Download {item['type'].upper()} ({idx+1}/{media_count})",
-                        data=binary_data,
+                        data=media_bytes,
                         file_name=item["filename"],
                         mime=mime_type,
                         key=f"dl_btn_{res['tweet_id']}_{idx}",
                         use_container_width=True
                     )
                 else:
-                    st.markdown(f"[🔗 Direct Media Download Link]({item['url']})")
+                    # Guaranteed Fallback
+                    st.markdown(
+                        f'<a href="{item["url"]}" target="_blank" download="{item["filename"]}" class="direct-dl-btn">⬇️ Download {item["type"].upper()} ({idx+1}/{media_count})</a>',
+                        unsafe_allow_html=True
+                    )
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -539,6 +499,5 @@ if "result" in st.session_state:
         # Clear Cache Button: ONLY displayed at the very bottom when media is loaded
         if st.button("🗑️ Clear Cache & Reset", use_container_width=True):
             st.cache_data.clear()
-            for key in ["result", "binaries", "zip_data"]:
-                st.session_state.pop(key, None)
+            st.session_state.clear()
             st.rerun()
