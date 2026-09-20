@@ -152,14 +152,9 @@ st.markdown('<div class="sub-title">Easily download mixed media (multiple videos
 # --- Initialize session state ---
 if 'media_items' not in st.session_state:
     st.session_state.media_items = []
-if 'last_url' not in st.session_state:
     st.session_state.last_url = None
-if 'status_message' not in st.session_state:
     st.session_state.status_message = None
-if 'error_details' not in st.session_state:
     st.session_state.error_details = None
-if 'download_cache' not in st.session_state:
-    st.session_state.download_cache = {}
 
 # --- Helper Functions for Advanced Extraction ---
 DEFAULT_HEADERS = {
@@ -219,14 +214,9 @@ def fetch_media_from_fxtwitter(tweet_id: str):
                 m_type = item.get("type")
                 if m_type == "photo":
                     img_url = item.get("url")
-                    orig_url = img_url
-                    preview_url = img_url
                     if "pbs.twimg.com" in img_url:
-                        base = re.sub(r'(\?|&)name=[a-zA-Z0-9_]+', '', img_url)
-                        sep = "&" if "?" in base else "?"
-                        orig_url = f"{base}{sep}name=orig"
-                        preview_url = f"{base}{sep}name=small"
-                    results.append({"url": orig_url, "preview_url": preview_url, "type": "image"})
+                        img_url = re.sub(r'(\?|&)name=[a-zA-Z0-9_]+', '', img_url) + "?name=orig"
+                    results.append({"url": img_url, "type": "image"})
                 elif m_type in ["video", "gif"]:
                     variants = item.get("variants", [])
                     chosen_url = item.get("url")
@@ -235,7 +225,7 @@ def fetch_media_from_fxtwitter(tweet_id: str):
                         if mp4s:
                             mp4s.sort(key=lambda x: x.get("bitrate") or 0, reverse=True)
                             chosen_url = mp4s[0].get("url")
-                    results.append({"url": chosen_url, "preview_url": chosen_url, "type": "video"})
+                    results.append({"url": chosen_url, "type": "video"})
             return results
     except Exception:
         pass
@@ -251,18 +241,13 @@ def fetch_media_from_vxtwitter(tweet_id: str):
             for item in data.get("media_extended", []):
                 t = "video" if item.get("type") in ["video", "gif"] else "image"
                 url = item.get("url")
-                orig_url = url
-                preview_url = url
                 if t == "image" and "pbs.twimg.com" in url:
-                    base = re.sub(r'(\?|&)name=[a-zA-Z0-9_]+', '', url)
-                    sep = "&" if "?" in base else "?"
-                    orig_url = f"{base}{sep}name=orig"
-                    preview_url = f"{base}{sep}name=small"
-                results.append({"url": orig_url, "preview_url": preview_url, "type": t})
+                    url = re.sub(r'(\?|&)name=[a-zA-Z0-9_]+', '', url) + "?name=orig"
+                results.append({"url": url, "type": t})
             if not results and data.get("mediaURLs"):
                 for url in data["mediaURLs"]:
                     t = "video" if (".mp4" in url or "video.twimg" in url) else "image"
-                    results.append({"url": url, "preview_url": url, "type": t})
+                    results.append({"url": url, "type": t})
             return results
     except Exception:
         pass
@@ -281,11 +266,9 @@ def fetch_media_from_syndication(tweet_id: str):
             for photo in data.get("photos", []):
                 purl = photo.get("url", "")
                 if purl:
-                    base = re.sub(r'(\?|&)name=[a-zA-Z0-9_]+', '', purl)
-                    sep = "&" if "?" in base else "?"
-                    orig_url = f"{base}{sep}name=orig"
-                    preview_url = f"{base}{sep}name=small"
-                    results.append({"url": orig_url, "preview_url": preview_url, "type": "image"})
+                    if "pbs.twimg.com" in purl:
+                        purl = re.sub(r'(\?|&)name=[a-zA-Z0-9_]+', '', purl) + "?name=orig"
+                    results.append({"url": purl, "type": "image"})
             
             video_info = data.get("video")
             if video_info:
@@ -293,7 +276,7 @@ def fetch_media_from_syndication(tweet_id: str):
                 mp4s = [v for v in variants if "mp4" in v.get("type", "") or ".mp4" in v.get("src", "")]
                 if mp4s:
                     mp4s.sort(key=lambda x: x.get("bitrate") or 0, reverse=True)
-                    results.append({"url": mp4s[0].get("src"), "preview_url": mp4s[0].get("src"), "type": "video"})
+                    results.append({"url": mp4s[0].get("src"), "type": "video"})
             return results
     except Exception:
         pass
@@ -311,17 +294,17 @@ with col2:
 
 st.markdown("<br>", unsafe_allow_html=True) # Spacer
 
-# --- Link Analysis Logic ---
+# --- Download Logic ---
 if fetch_clicked:
     if not tweet_url:
         st.warning("⚠️ Please enter a valid URL.")
     else:
         with st.spinner("Analyzing link and extracting all available media..."):
             extracted_media = []
-            st.session_state.download_cache = {} # Clear previous file bytes
+            seen_hashes = set()
             tweet_id = extract_tweet_id(tweet_url)
 
-            # Step 1: Attempt direct multi-tier zero-cookie APIs (Metadata only, extremely fast & zero mobile data wasted)
+            # Step 1: Attempt direct multi-tier zero-cookie APIs
             media_targets = None
             if tweet_id:
                 media_targets = fetch_media_from_fxtwitter(tweet_id)
@@ -334,30 +317,38 @@ if fetch_clicked:
                 for idx, item in enumerate(media_targets):
                     m_url = item["url"]
                     m_type = item["type"]
-                    p_url = item.get("preview_url", m_url)
+                    try:
+                        res = requests.get(m_url, headers=DEFAULT_HEADERS, timeout=30)
+                        if res.status_code == 200 and len(res.content) > 0:
+                            data = res.content
+                            file_hash = hashlib.md5(data).hexdigest()
+                            if file_hash in seen_hashes:
+                                continue
+                            seen_hashes.add(file_hash)
 
-                    if m_type == "video":
-                        ext = ".mp4"
-                        mime = "video/mp4"
-                    else:
-                        ext = ".png" if ("format=png" in m_url or ".png" in m_url) else ".jpg"
-                        mime = "image/png" if ext == ".png" else "image/jpeg"
+                            if m_type == "video":
+                                ext = ".mp4"
+                                mime = "video/mp4"
+                            else:
+                                ext = ".png" if ("format=png" in m_url or ".png" in m_url) else ".jpg"
+                                mime = "image/png" if ext == ".png" else "image/jpeg"
 
-                    name = f"twitter_{tweet_id}_{idx + 1}{ext}"
+                            name = f"twitter_{tweet_id}_{idx + 1}{ext}"
 
-                    extracted_media.append({
-                        "name": name,
-                        "url": m_url,
-                        "preview_url": p_url,
-                        "mime": mime,
-                        "type": m_type,
-                        "data": None
-                    })
+                            extracted_media.append({
+                                "name": name,
+                                "data": data,
+                                "mime": mime,
+                                "type": m_type
+                            })
+                    except Exception:
+                        continue
 
-            # Step 2: Fallback to yt-dlp & gallery-dl if web APIs yielded nothing
+            # Step 2: Fallback to yt-dlp & gallery-dl if web APIs were bypassed or yielded nothing
             if not extracted_media:
                 with tempfile.TemporaryDirectory(prefix="twitter_dl_") as temp_dir:
                     try:
+                        # yt-dlp with syndication extractor-args to bypass the GraphQL cookie wall
                         subprocess.run([
                             "yt-dlp",
                             "--extractor-args", "twitter:api=syndication",
@@ -379,7 +370,6 @@ if fetch_clicked:
                         valid_video_exts = [".mp4", ".webm", ".mkv"]
                         valid_image_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
 
-                        seen_hashes = set()
                         for fp in file_paths:
                             basename = os.path.basename(fp)
                             basename_lower = basename.lower()
@@ -406,8 +396,6 @@ if fetch_clicked:
 
                             extracted_media.append({
                                 "name": basename,
-                                "url": None,
-                                "preview_url": None,
                                 "data": data,
                                 "mime": mime_type,
                                 "type": "video" if is_video else "image"
@@ -437,57 +425,37 @@ if st.session_state.status_message == "success":
         with cols[idx % 2]: # Distribute evenly between left and right columns
             st.markdown('<div class="media-card">', unsafe_allow_html=True)
             
-            # 1. Preview Handling (Bandwidth-efficient)
+            # 1. Preview
             if show_preview:
                 if item["type"] == "video":
-                    # Direct CDN streaming: Only streams if the user presses play
-                    if item.get("url"):
-                        st.video(item["url"])
-                    elif item.get("data"):
-                        st.video(item["data"])
+                    st.video(item["data"])
                 else:
-                    # Lightweight image preview: Uses small preview resolution to save mobile bandwidth
-                    img_source = item.get("preview_url") or item.get("url") or item.get("data")
+                    # Safe version-agnostic image preview
                     try:
-                        st.image(img_source, use_container_width=True)
+                        st.image(item["data"], use_container_width=True)
                     except TypeError:
                         try:
-                            st.image(img_source, use_column_width=True)
+                            st.image(item["data"], use_column_width=True)
                         except Exception:
-                            st.image(img_source)
+                            st.image(item["data"])
                     except Exception:
-                        st.markdown("<div style='text-align: center; padding: 20px;'><h3>📸 Image File</h3></div>", unsafe_allow_html=True)
+                        try:
+                            st.image(io.BytesIO(item["data"]), use_container_width=True)
+                        except Exception:
+                            st.markdown("<div style='text-align: center; padding: 20px;'><h3>📸 Image File</h3></div>", unsafe_allow_html=True)
             else:
-                # Fallback if preview is toggled off (Transfers 0 KB of media to phone)
+                # Fallback if preview is toggled off
                 icon = "🎥" if item["type"] == "video" else "📸"
                 st.markdown(f"<div style='text-align: center; padding: 20px;'><h3>{icon} {item['type'].title()} File</h3></div>", unsafe_allow_html=True)
             
-            # 2. Individual Download Control (On-Demand: Zero background data usage)
-            cache_key = f"media_{idx}_{st.session_state.last_url}"
-            cached_data = st.session_state.download_cache.get(cache_key) or item.get("data")
-            
-            if cached_data is not None:
-                # File is prepared: Render the direct download button
-                st.download_button(
-                    label=f"💾 Save {item['type'].title()} to Device",
-                    data=cached_data,
-                    file_name=item["name"],
-                    mime=item["mime"],
-                    key=f"save_btn_{idx}_{st.session_state.last_url}"
-                )
-            else:
-                # File not yet downloaded to mobile: Show on-demand fetch button
-                if st.button(f"⬇️ Download {item['type'].title()}", key=f"fetch_btn_{idx}_{st.session_state.last_url}"):
-                    with st.spinner(f"Preparing high-quality {item['type'].title()}..."):
-                        try:
-                            res = requests.get(item["url"], headers=DEFAULT_HEADERS, timeout=45)
-                            if res.status_code == 200 and len(res.content) > 0:
-                                st.session_state.download_cache[cache_key] = res.content
-                                st.rerun()
-                            else:
-                                st.error("Failed to retrieve file from source. Please try again.")
-                        except Exception as dl_err:
-                            st.error(f"Download failed: {dl_err}")
+            # 2. Individual Download Button
+            st.download_button(
+                label=f"Download {item['type'].title()}",
+                data=item["data"],
+                file_name=item["name"],
+                mime=item["mime"],
+                key=f"dl_{idx}_{st.session_state.last_url}"
+            )
             
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -504,11 +472,10 @@ cc_col1, cc_col2, cc_col3 = st.columns([1, 1, 1])
 with cc_col2:
     if st.button("Clear Cache", use_container_width=True):
         st.session_state.media_items = []
-        st.session_state.download_cache = {}
         st.session_state.last_url = None
         st.session_state.status_message = None
         st.session_state.error_details = None
         st.rerun()
 
 st.caption("ℹ️ **Note:** X/Twitter limits automated access. If you experience errors, it usually means the server's IP has been temporarily restricted.")
-st.markdown('<div style="text-align: center;"><a href="https://github.com/JustToTryModels/Twitter-Downloader/blob/main/app.py" target="_blank" style="color: #536471; text-decoration: none; font-size: 14px;">View Source Code on GitHub 💻</a></div>', unsafe_allow_html=True)
+st.markdown('<div style="text-align: center;"><a href="https://github.com/JustToTryModels/Twitter-Downloader/blob/main/app.py" target="_blank" style="color: #536471; text-decoration: none; font-size: 14px;">View Source Code on GitHub 💻</a></div>', unsafe_allow_html=True) 
