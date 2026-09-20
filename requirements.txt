@@ -1,4 +1,4 @@
-streamlit>=1.35.0
-yt-dlp>=2026.9.10  # Use the latest version, as Twitter/X APIs change frequently
-gallery-dl>=1.28.0
+streamlit>=1.33.0
 requests>=2.31.0
+# only used by the optional last-resort fallback (off by default)
+yt-dlp>=2024.10.7
