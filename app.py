@@ -301,6 +301,7 @@ if fetch_clicked:
     else:
         with st.spinner("Analyzing link and extracting all available media..."):
             extracted_media = []
+            seen_urls = set()
             seen_hashes = set()
             tweet_id = extract_tweet_id(tweet_url)
 
@@ -317,32 +318,28 @@ if fetch_clicked:
                 for idx, item in enumerate(media_targets):
                     m_url = item["url"]
                     m_type = item["type"]
-                    try:
-                        res = requests.get(m_url, headers=DEFAULT_HEADERS, timeout=30)
-                        if res.status_code == 200 and len(res.content) > 0:
-                            data = res.content
-                            file_hash = hashlib.md5(data).hexdigest()
-                            if file_hash in seen_hashes:
-                                continue
-                            seen_hashes.add(file_hash)
-
-                            if m_type == "video":
-                                ext = ".mp4"
-                                mime = "video/mp4"
-                            else:
-                                ext = ".png" if ("format=png" in m_url or ".png" in m_url) else ".jpg"
-                                mime = "image/png" if ext == ".png" else "image/jpeg"
-
-                            name = f"twitter_{tweet_id}_{idx + 1}{ext}"
-
-                            extracted_media.append({
-                                "name": name,
-                                "data": data,
-                                "mime": mime,
-                                "type": m_type
-                            })
-                    except Exception:
+                    
+                    # Deduplicate by URL instead of downloading the file for MD5 hash
+                    if m_url in seen_urls:
                         continue
+                    seen_urls.add(m_url)
+
+                    if m_type == "video":
+                        ext = ".mp4"
+                        mime = "video/mp4"
+                    else:
+                        ext = ".png" if ("format=png" in m_url or ".png" in m_url) else ".jpg"
+                        mime = "image/png" if ext == ".png" else "image/jpeg"
+
+                    name = f"twitter_{tweet_id}_{idx + 1}{ext}"
+
+                    extracted_media.append({
+                        "name": name,
+                        "url": m_url,       # Store URL for lazy loading
+                        "data": None,       # No longer downloading file bytes into memory!
+                        "mime": mime,
+                        "type": m_type
+                    })
 
             # Step 2: Fallback to yt-dlp & gallery-dl if web APIs were bypassed or yielded nothing
             if not extracted_media:
@@ -396,6 +393,7 @@ if fetch_clicked:
 
                             extracted_media.append({
                                 "name": basename,
+                                "url": None,    # Handled via data payload
                                 "data": data,
                                 "mime": mime_type,
                                 "type": "video" if is_video else "image"
@@ -425,37 +423,75 @@ if st.session_state.status_message == "success":
         with cols[idx % 2]: # Distribute evenly between left and right columns
             st.markdown('<div class="media-card">', unsafe_allow_html=True)
             
-            # 1. Preview
+            # 1. Preview (Streamed directly from URL to save data)
             if show_preview:
                 if item["type"] == "video":
-                    st.video(item["data"])
+                    if item["url"]:
+                        st.video(item["url"])
+                    else:
+                        st.video(item["data"])
                 else:
-                    # Safe version-agnostic image preview
-                    try:
-                        st.image(item["data"], use_container_width=True)
-                    except TypeError:
+                    if item["url"]:
                         try:
-                            st.image(item["data"], use_column_width=True)
+                            st.image(item["url"], use_container_width=True)
                         except Exception:
-                            st.image(item["data"])
-                    except Exception:
+                            st.image(item["url"])
+                    else:
+                        # Safe version-agnostic image preview
                         try:
-                            st.image(io.BytesIO(item["data"]), use_container_width=True)
+                            st.image(item["data"], use_container_width=True)
+                        except TypeError:
+                            try:
+                                st.image(item["data"], use_column_width=True)
+                            except Exception:
+                                st.image(item["data"])
                         except Exception:
-                            st.markdown("<div style='text-align: center; padding: 20px;'><h3>📸 Image File</h3></div>", unsafe_allow_html=True)
+                            try:
+                                st.image(io.BytesIO(item["data"]), use_container_width=True)
+                            except Exception:
+                                st.markdown("<div style='text-align: center; padding: 20px;'><h3>📸 Image File</h3></div>", unsafe_allow_html=True)
             else:
                 # Fallback if preview is toggled off
                 icon = "🎥" if item["type"] == "video" else "📸"
                 st.markdown(f"<div style='text-align: center; padding: 20px;'><h3>{icon} {item['type'].title()} File</h3></div>", unsafe_allow_html=True)
             
             # 2. Individual Download Button
-            st.download_button(
-                label=f"Download {item['type'].title()}",
-                data=item["data"],
-                file_name=item["name"],
-                mime=item["mime"],
-                key=f"dl_{idx}_{st.session_state.last_url}"
-            )
+            if item["url"]:
+                # Direct link to save data and bypass server memory buffering
+                st.markdown(f"""
+                <a href="{item['url']}" target="_blank" download="{item['name']}" style="text-decoration: none; display: block;">
+                    <button style="
+                        background-color: #1DA1F2;
+                        color: white;
+                        font-size: 15px;
+                        font-weight: 700;
+                        padding: 10px 20px;
+                        border: none;
+                        border-radius: 9999px;
+                        width: 100%;
+                        box-shadow: 0 4px 12px rgba(29, 161, 242, 0.2);
+                        transition: background-color 0.2s ease, transform 0.1s ease;
+                        margin-top: 10px;
+                        cursor: pointer;
+                    "
+                    onmouseover="this.style.backgroundColor='#1A8CD8'" 
+                    onmouseout="this.style.backgroundColor='#1DA1F2'"
+                    onmousedown="this.style.transform='scale(0.98)'"
+                    onmouseup="this.style.transform='scale(1)'"
+                    >
+                        Download {item['type'].title()}
+                    </button>
+                </a>
+                """, unsafe_allow_html=True)
+            else:
+                # Fallback if tools manually downloaded the file
+                st.download_button(
+                    label=f"Download {item['type'].title()}",
+                    data=item["data"],
+                    file_name=item["name"],
+                    mime=item["mime"],
+                    key=f"dl_{idx}_{st.session_state.last_url}"
+                )
             
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -478,4 +514,4 @@ with cc_col2:
         st.rerun()
 
 st.caption("ℹ️ **Note:** X/Twitter limits automated access. If you experience errors, it usually means the server's IP has been temporarily restricted.")
-st.markdown('<div style="text-align: center;"><a href="https://github.com/JustToTryModels/Twitter-Downloader/blob/main/app.py" target="_blank" style="color: #536471; text-decoration: none; font-size: 14px;">View Source Code on GitHub 💻</a></div>', unsafe_allow_html=True) 
+st.markdown('<div style="text-align: center;"><a href="https://github.com/JustToTryModels/Twitter-Downloader/blob/main/app.py" target="_blank" style="color: #536471; text-decoration: none; font-size: 14px;">View Source Code on GitHub 💻</a></div>', unsafe_allow_html=True)
