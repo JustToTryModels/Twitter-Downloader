@@ -8,6 +8,7 @@ import hashlib
 import tempfile
 import subprocess
 import requests
+import io
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -429,7 +430,19 @@ if st.session_state.status_message == "success":
                 if item["type"] == "video":
                     st.video(item["data"])
                 else:
-                    st.image(item["data"], use_column_width=True)
+                    # Safe version-agnostic image preview
+                    try:
+                        st.image(item["data"], use_container_width=True)
+                    except TypeError:
+                        try:
+                            st.image(item["data"], use_column_width=True)
+                        except Exception:
+                            st.image(item["data"])
+                    except Exception:
+                        try:
+                            st.image(io.BytesIO(item["data"]), use_container_width=True)
+                        except Exception:
+                            st.markdown("<div style='text-align: center; padding: 20px;'><h3>📸 Image File</h3></div>", unsafe_allow_html=True)
             else:
                 # Fallback if preview is toggled off
                 icon = "🎥" if item["type"] == "video" else "📸"
