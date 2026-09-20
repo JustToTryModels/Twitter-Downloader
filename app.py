@@ -39,7 +39,7 @@ st.markdown(
         font-size: 1.05rem;
         margin-bottom: 2rem;
     }
-    
+
     /* Input Box */
     .stTextInput > div > div > input {
         border-radius: 14px !important;
@@ -54,7 +54,7 @@ st.markdown(
         background-color: #ffffff !important;
         box-shadow: 0 0 0 3px rgba(29, 161, 242, 0.15) !important;
     }
-    
+
     /* Tweet Card */
     .tweet-card {
         background: #ffffff;
@@ -84,17 +84,7 @@ st.markdown(
         white-space: pre-wrap;
         word-break: break-word;
     }
-    
-    /* Media Cards */
-    .media-card {
-        background: #ffffff;
-        border: 1px solid #EFF3F4;
-        border-radius: 14px;
-        padding: 12px;
-        margin-bottom: 15px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-    }
-    
+
     /* Buttons */
     div.stButton > button {
         border-radius: 9999px !important;
@@ -114,7 +104,6 @@ st.markdown(
         background-color: #1DA1F2 !important;
         color: white !important;
         border: none !important;
-        width: 100% !important;
     }
     div.stDownloadButton > button:hover {
         background-color: #1A8CD8 !important;
@@ -126,10 +115,6 @@ st.markdown(
             border-color: #2F3336;
         }
         .tweet-text { color: #E7E9EA; }
-        .media-card {
-            background: #16181C;
-            border-color: #2F3336;
-        }
         .stTextInput > div > div > input {
             background-color: #202327 !important;
             border-color: #2F3336 !important;
@@ -392,17 +377,18 @@ def create_batch_zip(media_items: List[Dict[str, Any]]) -> bytes:
 st.markdown('<div class="main-title">X / Twitter Media Downloader 🐦</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-title">High-res uncompressed media extractor with 4-tier zero-cookie failover.</div>', unsafe_allow_html=True)
 
+# Row 1: URL Input
 tweet_url = st.text_input(
     "URL Input",
     placeholder="https://x.com/username/status/123456789...",
     label_visibility="collapsed"
 )
 
-col_fetch, col_preview = st.columns([1, 1])
-with col_fetch:
-    fetch_btn = st.button("Extract Media", use_container_width=True)
-with col_preview:
-    show_previews = st.checkbox("Show Media Previews", value=True)
+# Row 2: Show Media Previews checkbox
+show_previews = st.checkbox("Show Media Previews", value=True)
+
+# Row 3: Extract Media button
+fetch_btn = st.button("Extract Media", use_container_width=True)
 
 if fetch_btn:
     if not tweet_url.strip():
@@ -444,23 +430,24 @@ if "result" in st.session_state:
         if media_count > 1:
             with st.spinner("Bundling all assets into ZIP..."):
                 zip_data = create_batch_zip(res["media"])
-                st.download_button(
-                    label=f"📦 Download All Media ({media_count} items) as .ZIP",
-                    data=zip_data,
-                    file_name=f"twitter_{res['tweet_id']}_bundle.zip",
-                    mime="application/zip",
-                    use_container_width=True,
-                )
+            st.download_button(
+                label=f"📦 Download All Media ({media_count} items) as .ZIP",
+                data=zip_data,
+                file_name=f"twitter_{res['tweet_id']}_bundle.zip",
+                mime="application/zip",
+                use_container_width=True,
+            )
             st.write("")
 
         # Media Grid
-        grid_cols = st.columns(2) if media_count > 1 else [st.container()]
+        if media_count > 1:
+            grid_cols = st.columns(2)
+        else:
+            grid_cols = [st.container()]
 
         for idx, item in enumerate(res["media"]):
             target_col = grid_cols[idx % 2] if media_count > 1 else grid_cols[0]
             with target_col:
-                st.markdown('<div class="media-card">', unsafe_allow_html=True)
-                
                 # Fetch raw content
                 try:
                     binary_data = download_binary_stream(item["url"])
@@ -478,9 +465,7 @@ if "result" in st.session_state:
                         file_name=item["filename"],
                         mime=mime_type,
                         key=f"dl_{res['tweet_id']}_{idx}",
-                        use_container_width=True
+                        use_container_width=True,
                     )
                 except Exception as dl_err:
                     st.error(f"Failed to stream asset: {dl_err}")
-
-                st.markdown('</div>', unsafe_allow_html=True)
