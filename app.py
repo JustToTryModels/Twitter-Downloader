@@ -1,16 +1,18 @@
-# app.py
 import streamlit as st
 import os
-import subprocess
-import tempfile
+import re
+import math
 import glob
 import mimetypes
 import hashlib
+import tempfile
+import subprocess
+import requests
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="Twitter Media Downloader",
-    page_icon="🐦",
+    page_title="Twitter Media Downloader", 
+    page_icon="🐦", 
     layout="centered",
     initial_sidebar_state="collapsed"
 )
@@ -153,6 +155,132 @@ if 'media_items' not in st.session_state:
     st.session_state.status_message = None
     st.session_state.error_details = None
 
+# --- Helper Functions for Advanced Extraction ---
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept": "*/*"
+}
+
+def extract_tweet_id(url: str) -> str:
+    """Extracts status numerical ID from any X/Twitter link format."""
+    match = re.search(r'status(?:es)?/(\d+)', url)
+    if match:
+        return match.group(1)
+    match_digits = re.search(r'^\s*(\d{15,22})\s*$', url)
+    if match_digits:
+        return match_digits.group(1)
+    return None
+
+def compute_syndication_token(tweet_id: str) -> str:
+    """Replicates browser token generation for Twitter's official syndication embed API."""
+    try:
+        val = (int(tweet_id) / 1e15) * math.pi
+        chars = '0123456789abcdefghijklmnopqrstuvwxyz'
+        int_part = int(val)
+        frac_part = val - int_part
+        int_str = ""
+        n = int_part
+        if n == 0:
+            int_str = "0"
+        else:
+            while n > 0:
+                int_str = chars[n % 36] + int_str
+                n //= 36
+        frac_str = ""
+        for _ in range(16):
+            frac_part *= 36
+            digit = int(frac_part)
+            frac_str += chars[digit]
+            frac_part -= digit
+            if frac_part == 0:
+                break
+        return re.sub(r'(0+|\.)', '', f"{int_str}.{frac_str}")
+    except Exception:
+        return ""
+
+def fetch_media_from_fxtwitter(tweet_id: str):
+    """Tier 1: High reliability multi-asset resolver."""
+    try:
+        res = requests.get(f"https://api.fxtwitter.com/status/{tweet_id}", headers=DEFAULT_HEADERS, timeout=12)
+        if res.status_code == 200:
+            data = res.json().get("tweet", {})
+            media_entries = data.get("media", {}).get("all", [])
+            if not media_entries and "quote" in data:
+                media_entries = data.get("quote", {}).get("media", {}).get("all", [])
+            
+            results = []
+            for item in media_entries:
+                m_type = item.get("type")
+                if m_type == "photo":
+                    img_url = item.get("url")
+                    if "pbs.twimg.com" in img_url:
+                        img_url = re.sub(r'(\?|&)name=[a-zA-Z0-9_]+', '', img_url) + "?name=orig"
+                    results.append({"url": img_url, "type": "image"})
+                elif m_type in ["video", "gif"]:
+                    variants = item.get("variants", [])
+                    chosen_url = item.get("url")
+                    if variants:
+                        mp4s = [v for v in variants if "mp4" in v.get("content_type", "") or ".mp4" in v.get("url", "")]
+                        if mp4s:
+                            mp4s.sort(key=lambda x: x.get("bitrate") or 0, reverse=True)
+                            chosen_url = mp4s[0].get("url")
+                    results.append({"url": chosen_url, "type": "video"})
+            return results
+    except Exception:
+        pass
+    return None
+
+def fetch_media_from_vxtwitter(tweet_id: str):
+    """Tier 2: Direct failover resolver."""
+    try:
+        res = requests.get(f"https://api.vxtwitter.com/Twitter/status/{tweet_id}", headers=DEFAULT_HEADERS, timeout=12)
+        if res.status_code == 200:
+            data = res.json()
+            results = []
+            for item in data.get("media_extended", []):
+                t = "video" if item.get("type") in ["video", "gif"] else "image"
+                url = item.get("url")
+                if t == "image" and "pbs.twimg.com" in url:
+                    url = re.sub(r'(\?|&)name=[a-zA-Z0-9_]+', '', url) + "?name=orig"
+                results.append({"url": url, "type": t})
+            if not results and data.get("mediaURLs"):
+                for url in data["mediaURLs"]:
+                    t = "video" if (".mp4" in url or "video.twimg" in url) else "image"
+                    results.append({"url": url, "type": t})
+            return results
+    except Exception:
+        pass
+    return None
+
+def fetch_media_from_syndication(tweet_id: str):
+    """Tier 3: Twitter syndication embed API."""
+    try:
+        token = compute_syndication_token(tweet_id)
+        token_param = f"&token={token}" if token else ""
+        url = f"https://cdn.syndication.twimg.com/tweet-result?id={tweet_id}&lang=en{token_param}"
+        res = requests.get(url, headers=DEFAULT_HEADERS, timeout=12)
+        if res.status_code == 200:
+            data = res.json()
+            results = []
+            for photo in data.get("photos", []):
+                purl = photo.get("url", "")
+                if purl:
+                    if "pbs.twimg.com" in purl:
+                        purl = re.sub(r'(\?|&)name=[a-zA-Z0-9_]+', '', purl) + "?name=orig"
+                    results.append({"url": purl, "type": "image"})
+            
+            video_info = data.get("video")
+            if video_info:
+                variants = video_info.get("variants", [])
+                mp4s = [v for v in variants if "mp4" in v.get("type", "") or ".mp4" in v.get("src", "")]
+                if mp4s:
+                    mp4s.sort(key=lambda x: x.get("bitrate") or 0, reverse=True)
+                    results.append({"url": mp4s[0].get("src"), "type": "video"})
+            return results
+    except Exception:
+        pass
+    return None
+
 # --- Input Area ---
 st.write("") # Spacer
 tweet_url = st.text_input("URL Input", placeholder="Paste X/Twitter link here... (e.g., https://x.com/user/status/123)", label_visibility="collapsed")
@@ -170,94 +298,117 @@ if fetch_clicked:
     if not tweet_url:
         st.warning("⚠️ Please enter a valid URL.")
     else:
-        with tempfile.TemporaryDirectory(prefix="twitter_dl_") as temp_dir:
-            
-            with st.spinner("Analyzing link and extracting all available media..."):
-                try:
-                    # 1. Fetch videos/GIFs using yt-dlp with updated API and impersonation
-                    subprocess.run([
-                        "yt-dlp",
-                        # Use a more stable API endpoint for public tweets
-                        "--extractor-args", "twitter:api=syndication",
-                        # Impersonate a real browser to avoid user-agent based blocks
-                        "--impersonate", "chrome",
-                        "-f", "bestvideo+bestaudio/best",
-                        "--merge-output-format", "mp4",
-                        "-o", os.path.join(temp_dir, "ytdlp_vid_%(id)s_%(autonumber)s.%(ext)s"),
-                        tweet_url
-                    ], capture_output=True)
+        with st.spinner("Analyzing link and extracting all available media..."):
+            extracted_media = []
+            seen_hashes = set()
+            tweet_id = extract_tweet_id(tweet_url)
 
-                    # 2. Fetch images using gallery-dl with a rate-limit friendly config
-                    subprocess.run([
-                        "gallery-dl",
-                        # Configure the tool to wait if it hits a rate limit
-                        "--config-ignore",
-                        "--option", "extractor.twitter.ratelimit=wait",
-                        "--directory", temp_dir,
-                        tweet_url
-                    ], capture_output=True)
+            # Step 1: Attempt direct multi-tier zero-cookie APIs
+            media_targets = None
+            if tweet_id:
+                media_targets = fetch_media_from_fxtwitter(tweet_id)
+                if not media_targets:
+                    media_targets = fetch_media_from_vxtwitter(tweet_id)
+                if not media_targets:
+                    media_targets = fetch_media_from_syndication(tweet_id)
 
-                    # 3. Collect ALL downloaded files recursively
-                    all_files = glob.glob(os.path.join(temp_dir, "**", "*"), recursive=True)
-                    file_paths = [f for f in all_files if os.path.isfile(f)]
+            if media_targets:
+                for idx, item in enumerate(media_targets):
+                    m_url = item["url"]
+                    m_type = item["type"]
+                    try:
+                        res = requests.get(m_url, headers=DEFAULT_HEADERS, timeout=30)
+                        if res.status_code == 200 and len(res.content) > 0:
+                            data = res.content
+                            file_hash = hashlib.md5(data).hexdigest()
+                            if file_hash in seen_hashes:
+                                continue
+                            seen_hashes.add(file_hash)
 
-                    valid_video_exts = [".mp4", ".webm", ".mkv"]
-                    valid_image_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
-                    
-                    extracted_media = []
-                    seen_hashes = set()
+                            if m_type == "video":
+                                ext = ".mp4"
+                                mime = "video/mp4"
+                            else:
+                                ext = ".png" if ("format=png" in m_url or ".png" in m_url) else ".jpg"
+                                mime = "image/png" if ext == ".png" else "image/jpeg"
 
-                    for fp in file_paths:
-                        basename = os.path.basename(fp)
-                        basename_lower = basename.lower()
-                        
-                        is_video = any(basename_lower.endswith(ext) for ext in valid_video_exts)
-                        is_image = any(basename_lower.endswith(ext) for ext in valid_image_exts)
+                            name = f"twitter_{tweet_id}_{idx + 1}{ext}"
 
-                        # Skip temporary or unwanted files entirely
-                        if not (is_video or is_image):
-                            continue
+                            extracted_media.append({
+                                "name": name,
+                                "data": data,
+                                "mime": mime,
+                                "type": m_type
+                            })
+                    except Exception:
+                        continue
+
+            # Step 2: Fallback to yt-dlp & gallery-dl if web APIs were bypassed or yielded nothing
+            if not extracted_media:
+                with tempfile.TemporaryDirectory(prefix="twitter_dl_") as temp_dir:
+                    try:
+                        # yt-dlp with syndication extractor-args to bypass the GraphQL cookie wall
+                        subprocess.run([
+                            "yt-dlp",
+                            "--extractor-args", "twitter:api=syndication",
+                            "-f", "bestvideo+bestaudio/best",
+                            "--merge-output-format", "mp4",
+                            "-o", os.path.join(temp_dir, "ytdlp_vid_%(id)s_%(autonumber)s.%(ext)s"),
+                            tweet_url
+                        ], capture_output=True, timeout=60)
+
+                        subprocess.run([
+                            "gallery-dl", 
+                            "--directory", temp_dir, 
+                            tweet_url
+                        ], capture_output=True, timeout=60)
+
+                        all_files = glob.glob(os.path.join(temp_dir, "**", "*"), recursive=True)
+                        file_paths = [f for f in all_files if os.path.isfile(f)]
+
+                        valid_video_exts = [".mp4", ".webm", ".mkv"]
+                        valid_image_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+
+                        for fp in file_paths:
+                            basename = os.path.basename(fp)
+                            basename_lower = basename.lower()
                             
-                        # DEDUPLICATION FIX: gallery-dl sometimes downloads identical videos alongside yt-dlp.
-                        # We force the app to ignore ANY video that was not downloaded by yt-dlp.
-                        if is_video and not basename.startswith("ytdlp_vid_"):
-                            continue
-                            
-                        # Read file data into memory
-                        with open(fp, "rb") as f:
-                            data = f.read()
-                        
-                        # Deduplicate images (If gallery-dl downloads multiple sizes/thumbnails of the exact same image)
-                        file_hash = hashlib.md5(data).hexdigest()
-                        if file_hash in seen_hashes:
-                            continue
-                        seen_hashes.add(file_hash)
+                            is_video = any(basename_lower.endswith(e) for e in valid_video_exts)
+                            is_image = any(basename_lower.endswith(e) for e in valid_image_exts)
 
-                        # Determine Mime Type
-                        mime_type, _ = mimetypes.guess_type(fp)
-                        if not mime_type:
-                            mime_type = "application/octet-stream"
+                            if not (is_video or is_image):
+                                continue
+                            if is_video and not basename.startswith("ytdlp_vid_"):
+                                continue
 
-                        # Set type for UI preview handling
-                        media_type = "video" if is_video else "image"
+                            with open(fp, "rb") as f:
+                                data = f.read()
 
-                        extracted_media.append({
-                            "name": basename,
-                            "data": data,
-                            "mime": mime_type,
-                            "type": media_type
-                        })
+                            file_hash = hashlib.md5(data).hexdigest()
+                            if file_hash in seen_hashes:
+                                continue
+                            seen_hashes.add(file_hash)
 
-                    if extracted_media:
-                        st.session_state.media_items = extracted_media
-                        st.session_state.last_url = tweet_url
-                        st.session_state.status_message = "success"
-                    else:
-                        st.session_state.status_message = "error_no_media"
-                
-                except Exception as e:
-                    st.session_state.status_message = "error_general"
-                    st.session_state.error_details = str(e)
+                            mime_type, _ = mimetypes.guess_type(fp)
+                            if not mime_type:
+                                mime_type = "video/mp4" if is_video else "image/jpeg"
+
+                            extracted_media.append({
+                                "name": basename,
+                                "data": data,
+                                "mime": mime_type,
+                                "type": "video" if is_video else "image"
+                            })
+                    except Exception as e:
+                        st.session_state.error_details = str(e)
+
+            # Finalize Session State
+            if extracted_media:
+                st.session_state.media_items = extracted_media
+                st.session_state.last_url = tweet_url
+                st.session_state.status_message = "success"
+            else:
+                st.session_state.status_message = "error_no_media"
 
 st.markdown("---")
 
